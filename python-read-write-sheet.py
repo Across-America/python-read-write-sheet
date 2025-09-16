@@ -2,6 +2,10 @@
 import smartsheet
 import logging
 import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 _dir = os.path.dirname(os.path.abspath(__file__))
 
