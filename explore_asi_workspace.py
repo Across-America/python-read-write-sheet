@@ -1,11 +1,16 @@
 # Explore ASI workspace
 import smartsheet
 import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 print("Connecting to Smartsheet...")
 
-# Use token from environment variable
-smart = smartsheet.Smartsheet()
+# Use token from environment variable or set directly
+token = os.getenv('SMARTSHEET_ACCESS_TOKEN', 'xr7pjb35y9FyLBJ1KoPXyTQ91W4kD7UQH9kFO')
+smart = smartsheet.Smartsheet(access_token=token)
 smart.errors_as_exceptions(True)
 
 # ASI 工作区 ID
