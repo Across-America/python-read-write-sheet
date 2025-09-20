@@ -1,5 +1,8 @@
 # Test the auto call and update system
-from auto_call_and_update import auto_call_and_update
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from core.auto_call_and_update import auto_call_and_update
 
 print("🤖 AUTO CALL AND UPDATE TEST")
 print("="*50)

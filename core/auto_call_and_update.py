@@ -1,10 +1,10 @@
 # Auto call and update - Make call, monitor status, then update result
-import requests
+import requests  # pyright: ignore[reportMissingModuleSource]
 import time
 import os
-from dotenv import load_dotenv
-import smartsheet
-from read_cancellation_dev import find_phone_by_client_policy
+from dotenv import load_dotenv  # pyright: ignore[reportMissingImports]
+import smartsheet  # pyright: ignore[reportMissingImports]
+from ..tools.read_cancellation_dev import find_phone_by_client_policy
 
 # Load environment variables
 load_dotenv()
@@ -12,20 +12,42 @@ load_dotenv()
 # VAPI Configuration
 VAPI_API_KEY = "763666f4-1d39-46f5-9539-0b052ddb8495"
 ASSISTANT_ID = "8e07049e-f7c8-4e5d-a893-8c33a318490d"
-PHONE_NUMBER_ID = "2f8d40fa-32c8-421b-8c70-ec877e4e9948"
-
 # Smartsheet Configuration
 token = os.getenv('SMARTSHEET_ACCESS_TOKEN', 'xr7pjb35y9FyLBJ1KoPXyTQ91W4kD7UQH9kFO')
 smart = smartsheet.Smartsheet(access_token=token)
 smart.errors_as_exceptions(True)
 cancellation_dev_sheet_id = 5146141873098628
 
-def make_vapi_call(phone_number):
+
+
+# Multiple phone numbers for load balancing and avoiding limits
+PHONE_NUMBER_IDS = [
+    "29e32cd8-432f-4205-85bd-c001154b94a2",  # Twilio number: +19093100491
+    "9c5c434b-7c24-42c1-a53d-0b293d436a34",  # New number: +19093256365
+    "2f8d40fa-32c8-421b-8c70-ec877e4e9948",  # Original number: +16264602769
+    "03c87616-5adf-4e83-ab40-9d921882f2d4",  # New number: +16265219363 (626-521-9363)
+]
+
+# Track which phone number to use next
+current_phone_index = 0
+
+def get_next_phone_number_id():
     """
-    Make VAPI call and return call ID
+    Get the next phone number ID for load balancing
+    Returns the next available phone number ID
+    """
+    global current_phone_index
+    phone_id = PHONE_NUMBER_IDS[current_phone_index]
+    current_phone_index = (current_phone_index + 1) % len(PHONE_NUMBER_IDS)
+    return phone_id
+
+def make_vapi_call(phone_number, customer_info=None):
+    """
+    Make VAPI call with personalized greeting and return call ID
     
     Args:
         phone_number (str): Phone number to call
+        customer_info (dict): Optional customer information for context
     
     Returns:
         str: Call ID if successful, None if failed
@@ -43,6 +65,42 @@ def make_vapi_call(phone_number):
     
     print(f"📞 Making VAPI call to: {formatted_phone}")
     
+    # Get the next available phone number ID
+    phone_number_id = get_next_phone_number_id()
+    print(f"📞 Using phone number {current_phone_index}/{len(PHONE_NUMBER_IDS)}")
+    
+    # Prepare payload with customer context
+    payload = {
+        "assistantId": ASSISTANT_ID,
+        "customers": [
+            {
+                "number": formatted_phone
+            }
+        ],
+        "phoneNumberId": phone_number_id
+    }
+    
+    # Add customer context if available
+    if customer_info:
+        customer_name = customer_info.get("insured", "")
+        agent_name = customer_info.get("agent_name", "")
+        office = customer_info.get("office", "")
+        policy_number = customer_info.get("policy_number", "")
+        
+        # Add customer information to the payload
+        payload["customers"][0]["name"] = customer_name
+        
+        # Note: VAPI will use the customer name for personalization
+        # The actual greeting template should be configured in VAPI dashboard
+        # using variables like {{customer.name}}
+        
+        print(f"👤 Customer: {customer_name}")
+        print(f"🏢 Office: {office}")
+        print(f"👨‍💼 Agent: {agent_name}")
+        print(f"📋 Policy: {policy_number}")
+        print(f"📱 Phone: {phone_number}")
+        print(f"💬 Variables set for VAPI template: customer_name, agent_name, office, policy_number, phone_number")
+    
     try:
         response = requests.post(
             "https://api.vapi.ai/call",
@@ -50,15 +108,7 @@ def make_vapi_call(phone_number):
                 "Authorization": f"Bearer {VAPI_API_KEY}",
                 "Content-Type": "application/json"
             },
-            json={
-                "assistantId": ASSISTANT_ID,
-                "customers": [
-                    {
-                        "number": formatted_phone
-                    }
-                ],
-                "phoneNumberId": PHONE_NUMBER_ID
-            }
+            json=payload
         )
         
         print(f"📡 Response Status: {response.status_code}")
@@ -227,9 +277,67 @@ def update_smartsheet_call_result(client_id, policy_number, call_data):
             f"Cost: ${cost:.4f}" if cost else "Cost: $0.00"
         ]
         
-        # Add summary if available (truncated)
+        # Add detailed summary information based on actual call content
         if summary:
-            summary_short = summary[:150] + "..." if len(summary) > 150 else summary
+            summary_lower = summary.lower()
+            useful_info = []
+            
+            # Check for call issues first (highest priority)
+            if 'wrong person' in summary_lower or 'wrong number' in summary_lower:
+                useful_info.append('WRONG PERSON/NUMBER')
+            elif 'not the right person' in summary_lower or 'different person' in summary_lower:
+                useful_info.append('INCORRECT CONTACT')
+            elif 'no answer' in summary_lower or 'voicemail' in summary_lower or 'answering machine' in summary_lower:
+                useful_info.append('NO ANSWER/VOICEMAIL')
+            elif 'busy' in summary_lower or 'line busy' in summary_lower:
+                useful_info.append('LINE BUSY')
+            elif 'disconnected' in summary_lower or 'hung up' in summary_lower:
+                useful_info.append('CALL DISCONNECTED')
+            
+            # Check for customer responses
+            if 'not interested' in summary_lower or 'declined' in summary_lower or 'refused' in summary_lower:
+                useful_info.append('Customer declined')
+            elif 'interested' in summary_lower or 'wants' in summary_lower or 'agreed' in summary_lower:
+                useful_info.append('Customer interested')
+            elif 'angry' in summary_lower or 'upset' in summary_lower or 'frustrated' in summary_lower:
+                useful_info.append('Customer upset')
+            elif 'confused' in summary_lower or 'unsure' in summary_lower:
+                useful_info.append('Customer confused')
+            
+            # Check for specific outcomes
+            if 'resolved' in summary_lower or 'solved' in summary_lower or 'fixed' in summary_lower:
+                useful_info.append('Issue resolved')
+            elif 'follow up' in summary_lower or 'callback' in summary_lower or 'call back' in summary_lower:
+                useful_info.append('Needs follow-up')
+            elif 'transfer' in summary_lower or 'forwarded' in summary_lower:
+                useful_info.append('Call transferred')
+            
+            # Check for payment related
+            if 'payment made' in summary_lower or 'paid' in summary_lower or 'payment received' in summary_lower:
+                useful_info.append('Payment received')
+            elif 'payment issue' in summary_lower or 'payment problem' in summary_lower or 'cannot pay' in summary_lower:
+                useful_info.append('Payment issue')
+            
+            # Only mark as SUCCESS if there are clear positive indicators and no negative ones
+            negative_indicators = ['wrong person', 'wrong number', 'not interested', 'declined', 'refused', 'angry', 'upset', 'hung up', 'disconnected', 'no answer']
+            positive_indicators = ['resolved', 'agreed', 'interested', 'payment made', 'successful', 'completed successfully']
+            
+            has_negative = any(indicator in summary_lower for indicator in negative_indicators)
+            has_positive = any(indicator in summary_lower for indicator in positive_indicators)
+            
+            if has_positive and not has_negative:
+                if 'SUCCESS' not in [info.upper() for info in useful_info]:
+                    useful_info.append('SUCCESS')
+            elif has_negative:
+                if 'FAILED' not in [info.upper() for info in useful_info]:
+                    useful_info.append('ISSUE DETECTED')
+            
+            # Create detailed summary
+            if useful_info:
+                summary_short = ' | '.join(useful_info[:4])  # Allow up to 4 key points
+            else:
+                summary_short = 'Call completed - outcome unclear'
+            
             call_result_parts.append(f"Summary: {summary_short}")
         
         call_result = " | ".join(call_result_parts)
@@ -276,7 +384,9 @@ def auto_call_and_update(client_id, policy_number, phone_number=None):
     print(f"Policy Number: {policy_number}")
     print("="*60)
     
-    # Step 1: Get phone number if not provided
+    customer_info = None  # Initialize customer_info
+    
+    # Step 1: Get phone number and customer info if not provided
     if not phone_number:
         print(f"🔍 Looking up phone number...")
         try:
@@ -288,6 +398,8 @@ def auto_call_and_update(client_id, policy_number, phone_number=None):
                 return False
             
             phone_number = result.get('phone_number')
+            customer_info = result  # Store customer info for later use
+            
             if not phone_number or phone_number == "No phone number":
                 print(f"❌ No valid phone number found for this customer")
                 return False
@@ -298,8 +410,17 @@ def auto_call_and_update(client_id, policy_number, phone_number=None):
             print(f"❌ Error looking up phone number: {e}")
             return False
     
-    # Step 2: Make the call
-    call_id = make_vapi_call(phone_number)
+    # Step 2: Get customer info if not already available
+    if not customer_info:
+        try:
+            sheet = smart.Sheets.get_sheet(cancellation_dev_sheet_id)
+            result = find_phone_by_client_policy(sheet, client_id, policy_number)
+            if result["found"]:
+                customer_info = result
+        except Exception as e:
+            print(f"⚠️ Could not retrieve customer info: {e}")
+    
+    call_id = make_vapi_call(phone_number, customer_info)
     if not call_id:
         print(f"❌ Failed to initiate call")
         return False

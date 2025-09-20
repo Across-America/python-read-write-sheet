@@ -2,7 +2,7 @@
 import requests
 import os
 from dotenv import load_dotenv
-from read_cancellation_dev import search_phone_number, find_phone_by_client_policy
+from ..tools.read_cancellation_dev import search_phone_number, find_phone_by_client_policy
 import smartsheet
 
 # Load environment variables
@@ -11,11 +11,35 @@ load_dotenv()
 # VAPI Configuration
 VAPI_API_KEY = "763666f4-1d39-46f5-9539-0b052ddb8495"
 ASSISTANT_ID = "8e07049e-f7c8-4e5d-a893-8c33a318490d"
-PHONE_NUMBER_ID = "2f8d40fa-32c8-421b-8c70-ec877e4e9948"
+
+# Multiple phone numbers for load balancing
+PHONE_NUMBER_IDS = [
+    "2f8d40fa-32c8-421b-8c70-ec877e4e9948",  # Original number: +16264602769
+    "03c87616-5adf-4e83-ab40-9d921882f2d4",  # New number: +16265219363 (626-521-9363)
+]
+
+# Track which phone number to use next
+current_phone_index = 0
+
+def get_next_phone_number_id():
+    """
+    Get the next phone number ID for load balancing
+    Returns the next available phone number ID
+    """
+    global current_phone_index
+    
+    if not PHONE_NUMBER_IDS:
+        raise Exception("No phone numbers configured!")
+    
+    phone_id = PHONE_NUMBER_IDS[current_phone_index]
+    current_phone_index = (current_phone_index + 1) % len(PHONE_NUMBER_IDS)
+    
+    print(f"📞 Using phone number {current_phone_index + 1}/{len(PHONE_NUMBER_IDS)}")
+    return phone_id
 
 def make_vapi_call(phone_number, customer_info=None):
     """
-    Make a VAPI call to the specified phone number
+    Make a VAPI call to the specified phone number with personalized greeting
     
     Args:
         phone_number (str): Phone number to call
@@ -24,40 +48,80 @@ def make_vapi_call(phone_number, customer_info=None):
     Returns:
         dict: VAPI response
     """
+    # Format phone number to E.164 format
+    if not phone_number.startswith('+'):
+        if len(phone_number) == 10:
+            formatted_phone = f"+1{phone_number}"
+        elif len(phone_number) == 11 and phone_number.startswith('1'):
+            formatted_phone = f"+{phone_number}"
+        else:
+            formatted_phone = f"+1{phone_number}"
+    else:
+        formatted_phone = phone_number
+    
     url = "https://api.vapi.ai/call"
     headers = {
         "Authorization": f"Bearer {VAPI_API_KEY}",
         "Content-Type": "application/json"
     }
     
+    # Get next available phone number
+    phone_number_id = get_next_phone_number_id()
+    
     payload = {
         "assistantId": ASSISTANT_ID,
         "customers": [
             {
-                "number": phone_number
+                "number": formatted_phone
             }
         ],
-        "phoneNumberId": PHONE_NUMBER_ID
+        "phoneNumberId": phone_number_id
     }
     
     # Add customer context if available
     if customer_info:
-        payload["customers"][0]["name"] = customer_info.get("insured", "")
-        # You can add more customer context here if needed
+        # Extract customer name for personalized greeting
+        customer_name = customer_info.get("insured", "")
+        agent_name = customer_info.get("agent_name", "")
+        office = customer_info.get("office", "")
+        policy_number = customer_info.get("policy_number", "")
+        phone_number = customer_info.get("phone_number", formatted_phone)
+        
+        # Add only basic customer information that VAPI supports
+        payload["customers"][0]["name"] = customer_name
+        
+        # Note: VAPI variables might need to be configured in the dashboard
+        # The assistant should be configured with these variables in VAPI dashboard
+        # and they should be accessible via {{customer.name}} in the template
     
     try:
-        print(f"📞 Making VAPI call to: {phone_number}")
+        print(f"📞 Making VAPI call to: {formatted_phone}")
         if customer_info:
             print(f"👤 Customer: {customer_info.get('insured', 'Unknown')}")
             print(f"📋 Policy: {customer_info.get('policy_number', 'Unknown')}")
             print(f"🏢 Office: {customer_info.get('office', 'Unknown')}")
+            print(f"👨‍💼 Agent: {customer_info.get('agent_name', 'Unknown')}")
+            print(f"💬 Personalized greeting will use customer name: {customer_info.get('insured', 'Unknown')}")
         
         response = requests.post(url, headers=headers, json=payload)
         
-        if response.status_code == 200:
+        if response.status_code in [200, 201]:
             result = response.json()
             print(f"✅ Call initiated successfully!")
-            print(f"📞 Call ID: {result.get('id', 'Unknown')}")
+            
+            # Handle different response formats
+            if 'results' in result and len(result['results']) > 0:
+                call_data = result['results'][0]
+                call_id = call_data.get('id', 'Unknown')
+                status = call_data.get('status', 'Unknown')
+                print(f"📞 Call ID: {call_id}")
+                print(f"📊 Status: {status}")
+                print(f"👤 Customer: {call_data.get('customer', {}).get('name', 'Unknown')}")
+                print(f"📱 Phone: {call_data.get('customer', {}).get('number', 'Unknown')}")
+            else:
+                call_id = result.get('id', 'Unknown')
+                print(f"📞 Call ID: {call_id}")
+            
             return result
         else:
             print(f"❌ Call failed with status code: {response.status_code}")
