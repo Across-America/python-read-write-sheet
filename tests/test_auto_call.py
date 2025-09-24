@@ -1,5 +1,5 @@
 # Test the auto call and update system
-from auto_call_and_update import auto_call_and_update
+from api.auto_call_and_update import auto_call_and_update
 
 print("🤖 AUTO CALL AND UPDATE TEST")
 print("="*50)

@@ -1,5 +1,5 @@
 # Test VAPI integration without making actual calls
-from read_cancellation_dev import search_phone_number
+from api.read_cancellation_dev import search_phone_number
 import requests
 
 print("🧪 TESTING VAPI INTEGRATION")

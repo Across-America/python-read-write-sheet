@@ -2,20 +2,22 @@
 import smartsheet
 import os
 from dotenv import load_dotenv
-# import pandas as pd  # Not needed for this script
 
 # Load environment variables from .env file
 load_dotenv()
 
-print("Connecting to Smartsheet...")
-
 # Use token from environment variable or set directly
 token = os.getenv('SMARTSHEET_ACCESS_TOKEN', 'xr7pjb35y9FyLBJ1KoPXyTQ91W4kD7UQH9kFO')
-smart = smartsheet.Smartsheet(access_token=token)
-smart.errors_as_exceptions(True)
 
 # Cancellations Dev sheet ID
 cancellation_dev_sheet_id = 5146141873098628
+
+# Initialize Smartsheet client only when needed
+def get_smartsheet_client():
+    """Get Smartsheet client instance"""
+    smart = smartsheet.Smartsheet(access_token=token)
+    smart.errors_as_exceptions(True)
+    return smart
 
 def display_sheet_structure(sheet):
     """Display the structure of the sheet"""
@@ -34,7 +36,7 @@ def display_sheet_structure(sheet):
 
 def find_phone_by_client_policy(sheet, client_id, policy_number):
     """
-    Find phone number by Client ID and Policy Number
+    Find phone number and other details by Client ID and Policy Number
     
     Args:
         sheet: Smartsheet sheet object
@@ -42,14 +44,13 @@ def find_phone_by_client_policy(sheet, client_id, policy_number):
         policy_number (str): Policy Number to search for
     
     Returns:
-        dict: Result containing phone number and other info, or None if not found
+        dict: Search result with found status and details
     """
-    # Get column IDs for the fields we need
+    # Find column IDs for the search
     client_id_col = None
     policy_number_col = None
     phone_number_col = None
     
-    # Find the column IDs
     for col in sheet.columns:
         if col.title == "Client ID":
             client_id_col = col.id
@@ -58,12 +59,16 @@ def find_phone_by_client_policy(sheet, client_id, policy_number):
         elif col.title == "Phone number":
             phone_number_col = col.id
     
-    # Check if all required columns exist
-    if not all([client_id_col, policy_number_col, phone_number_col]):
-        missing_cols = []
-        if not client_id_col: missing_cols.append("Client ID")
-        if not policy_number_col: missing_cols.append("Policy Number")
-        if not phone_number_col: missing_cols.append("Phone number")
+    # Check if we found all required columns
+    missing_cols = []
+    if not client_id_col:
+        missing_cols.append("Client ID")
+    if not policy_number_col:
+        missing_cols.append("Policy Number")
+    if not phone_number_col:
+        missing_cols.append("Phone number")
+    
+    if missing_cols:
         return {
             "found": False,
             "error": f"Missing required columns: {', '.join(missing_cols)}"
@@ -117,10 +122,11 @@ def search_phone_number(client_id, policy_number):
         policy_number (str): Policy Number to search for
     
     Returns:
-        str: Phone number if found, or error message
+        str: Phone number if found, None if not found
     """
     try:
         # Get the sheet
+        smart = get_smartsheet_client()
         sheet = smart.Sheets.get_sheet(cancellation_dev_sheet_id)
         
         # Search for the record
@@ -151,21 +157,19 @@ def search_phone_number(client_id, policy_number):
 
 def display_sheet_data(sheet, max_rows=10):
     """Display the data from the sheet"""
-    print(f"\n📊 Sheet Data (showing first {max_rows} rows):")
-    print("=" * 80)
-    
-    # Get column headers
-    headers = [col.title for col in sheet.columns]
+    print(f"\n📋 Sheet Data (first {max_rows} rows):")
+    print("-" * 80)
     
     # Display headers
-    header_line = " | ".join(f"{header:<15}" for header in headers[:6])  # Show first 6 columns
-    print(header_line)
-    print("-" * len(header_line))
+    headers = [col.title[:15] for col in sheet.columns[:8]]  # Limit to first 8 columns for display
+    header_line = " | ".join(f"{header:<15}" for header in headers)
+    print(f"    {header_line}")
+    print("-" * 80)
     
     # Display data rows
     for i, row in enumerate(sheet.rows[:max_rows], 1):
         row_data = []
-        for col in sheet.columns[:6]:  # Show first 6 columns
+        for col in sheet.columns[:8]:  # Limit to first 8 columns
             cell = row.get_column(col.id)
             value = str(cell.display_value) if cell.display_value else ""
             row_data.append(value[:15])  # Limit cell width
@@ -176,56 +180,60 @@ def display_sheet_data(sheet, max_rows=10):
     if len(sheet.rows) > max_rows:
         print(f"\n... and {len(sheet.rows) - max_rows} more rows")
 
-try:
+def main():
+    """Main execution function - loads and displays sheet data"""
+    print("Connecting to Smartsheet...")
     print('Getting Cancellations Dev sheet data...')
     
-    # Get the sheet with all data
-    sheet = smart.Sheets.get_sheet(cancellation_dev_sheet_id, include='attachments,discussions')
-    
-    print(f"\n🎯 Successfully loaded: {sheet.name}")
-    
-    # Display sheet structure
-    display_sheet_structure(sheet)
-    
-    # Display sheet data
-    display_sheet_data(sheet, max_rows=15)
-    
-    # Additional analysis
-    print(f"\n📈 Data Summary:")
-    print(f"- Total records: {len(sheet.rows)}")
-    print(f"- Last modified: {sheet.modified_at}")
-    
-    # Check for specific columns that might indicate cancellation data
-    cancellation_columns = []
-    for col in sheet.columns:
-        if any(keyword in col.title.lower() for keyword in ['cancel', 'status', 'reason', 'date', 'policy']):
-            cancellation_columns.append(col.title)
-    
-    if cancellation_columns:
-        print(f"\n🔍 Cancellation-related columns found:")
-        for col in cancellation_columns:
-            print(f"  - {col}")
-    
-    print(f"\n✅ Data retrieval completed successfully!")
-    print(f"📊 You can now analyze the {len(sheet.rows)} records in this cancellation dataset.")
-    
-    # Example usage of the search function
-    print(f"\n" + "="*60)
-    print("📞 PHONE NUMBER SEARCH EXAMPLE")
-    print("="*60)
-    print("Usage: search_phone_number('client_id', 'policy_number')")
-    print("Example: search_phone_number('24765', 'ABC123')")
-    print()
-    print("To use this function in another script:")
-    print("1. Import this file: from read_cancellation_dev import search_phone_number")
-    print("2. Call: phone = search_phone_number('your_client_id', 'your_policy_number')")
+    try:
+        # Get the sheet with all data
+        smart = get_smartsheet_client()
+        sheet = smart.Sheets.get_sheet(cancellation_dev_sheet_id, include='attachments,discussions')
+        
+        print(f"\n🎯 Successfully loaded: {sheet.name}")
+        
+        # Display sheet structure
+        display_sheet_structure(sheet)
+        
+        # Display sheet data
+        display_sheet_data(sheet, max_rows=15)
+        
+        # Additional analysis
+        print(f"\n📈 Data Summary:")
+        print(f"- Total records: {len(sheet.rows)}")
+        print(f"- Last modified: {sheet.modified_at}")
+        
+        # Check for specific columns that might indicate cancellation data
+        cancellation_columns = []
+        for col in sheet.columns:
+            if any(keyword in col.title.lower() for keyword in ['cancel', 'status', 'reason', 'date', 'policy']):
+                cancellation_columns.append(col.title)
+        
+        if cancellation_columns:
+            print(f"\n🔍 Cancellation-related columns found:")
+            for col in cancellation_columns:
+                print(f"  - {col}")
+        
+        print(f"\n✅ Data retrieval completed successfully!")
+        print(f"📊 You can now analyze the {len(sheet.rows)} records in this cancellation dataset.")
+        
+        # Example usage of the search function
+        print(f"\n" + "="*60)
+        print("📞 PHONE NUMBER SEARCH EXAMPLE")
+        print("="*60)
+        print("Usage: search_phone_number('client_id', 'policy_number')")
+        print("Example: search_phone_number('24765', 'ABC123')")
+        print()
+        print("To use this function in another script:")
+        print("1. Import this file: from read_cancellation_dev import search_phone_number")
+        print("2. Call: phone = search_phone_number('your_client_id', 'your_policy_number')")
 
-except Exception as e:
-    print(f'Error: {e}')
-    print('Please ensure you have access to this sheet')
+    except Exception as e:
+        print(f'Error: {e}')
+        print('Please ensure you have access to this sheet')
 
-# If this script is run directly, provide an interactive mode
-if __name__ == "__main__":
+def interactive_mode():
+    """Interactive phone search mode"""
     print(f"\n" + "="*60)
     print("🔍 INTERACTIVE PHONE SEARCH MODE")
     print("="*60)
@@ -259,3 +267,11 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"❌ Error: {e}")
             continue
+
+# If this script is run directly, provide main functionality and interactive mode
+if __name__ == "__main__":
+    # Run the main data loading first
+    main()
+    
+    # Then start interactive mode
+    interactive_mode()

@@ -4,7 +4,7 @@ import time
 import os
 from dotenv import load_dotenv
 import smartsheet
-from read_cancellation_dev import find_phone_by_client_policy
+from .read_cancellation_dev import find_phone_by_client_policy
 
 # Load environment variables
 load_dotenv()
@@ -16,9 +16,14 @@ PHONE_NUMBER_ID = "2f8d40fa-32c8-421b-8c70-ec877e4e9948"
 
 # Smartsheet Configuration
 token = os.getenv('SMARTSHEET_ACCESS_TOKEN', 'xr7pjb35y9FyLBJ1KoPXyTQ91W4kD7UQH9kFO')
-smart = smartsheet.Smartsheet(access_token=token)
-smart.errors_as_exceptions(True)
 cancellation_dev_sheet_id = 5146141873098628
+
+# Initialize Smartsheet client only when needed
+def get_smartsheet_client():
+    """Get Smartsheet client instance"""
+    smart = smartsheet.Smartsheet(access_token=token)
+    smart.errors_as_exceptions(True)
+    return smart
 
 def make_vapi_call(phone_number):
     """
@@ -182,6 +187,7 @@ def update_smartsheet_call_result(client_id, policy_number, call_data):
         print(f"📝 Updating Smartsheet for Client ID: {client_id}, Policy: {policy_number}")
         
         # Get the sheet
+        smart = get_smartsheet_client()
         sheet = smart.Sheets.get_sheet(cancellation_dev_sheet_id)
         
         # Find the record
@@ -280,6 +286,7 @@ def auto_call_and_update(client_id, policy_number, phone_number=None):
     if not phone_number:
         print(f"🔍 Looking up phone number...")
         try:
+            smart = get_smartsheet_client()
             sheet = smart.Sheets.get_sheet(cancellation_dev_sheet_id)
             result = find_phone_by_client_policy(sheet, client_id, policy_number)
             
