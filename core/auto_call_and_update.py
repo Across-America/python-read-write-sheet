@@ -18,7 +18,16 @@ smart = smartsheet.Smartsheet(access_token=token)
 smart.errors_as_exceptions(True)
 cancellation_dev_sheet_id = 5146141873098628
 
+# 🏢 COMPANY CALLER ID CONFIGURATION
+# 硬性要求：必须显示公司号码 +1 (951) 247-2003
+COMPANY_PHONE_NUMBER_ID = "def7dca0-2096-42be-82d7-812eeb7e3ed3"  # +1 (951) 247-2003
 
+def get_company_phone_number_id():
+    """
+    返回固定的公司电话号码ID
+    硬性要求：所有通话都将显示为 +1 (951) 247-2003
+    """
+    return COMPANY_PHONE_NUMBER_ID
 
 # Multiple phone numbers for load balancing and avoiding limits
 PHONE_NUMBER_IDS = [
@@ -65,9 +74,10 @@ def make_vapi_call(phone_number, customer_info=None):
     
     print(f"📞 Making VAPI call to: {formatted_phone}")
     
-    # Get the next available phone number ID
-    phone_number_id = get_next_phone_number_id()
-    print(f"📞 Using phone number {current_phone_index}/{len(PHONE_NUMBER_IDS)}")
+    # 🏢 使用固定的公司号码，硬性要求显示 +1 (951) 247-2003
+    phone_number_id = get_company_phone_number_id()
+    print(f"🏢 Using company phone: +1 (951) 247-2003")
+    print(f"📱 Customer will see: +1 (951) 247-2003")
     
     # Prepare payload with customer context
     payload = {
