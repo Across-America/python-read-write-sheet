@@ -1,1 +1,7 @@
-# Utility modules for configuration and data processing
+"""
+Utility functions module
+"""
+
+from .phone_formatter import format_phone_number
+
+__all__ = ['format_phone_number']
