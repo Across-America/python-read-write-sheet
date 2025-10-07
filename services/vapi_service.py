@@ -14,7 +14,7 @@ from utils import format_phone_number
 class VAPIService:
     """Service for interacting with VAPI API"""
 
-    def __init__(self, assistant_id):
+    def __init__(self, assistant_id=None):
         self.api_key = VAPI_API_KEY
         self.assistant_id = assistant_id
         self.phone_number_id = COMPANY_PHONE_NUMBER_ID
@@ -320,3 +320,127 @@ class VAPIService:
             print("-" * 40)
             print(transcript)
             print("-" * 40)
+
+    def make_batch_call_with_assistant(self, customers, assistant_id, schedule_immediately=True):
+        """
+        Make batch VAPI call with a specific assistant ID
+        
+        Args:
+            customers (list): List of customer records
+            assistant_id (str): Specific assistant ID to use for this batch
+            schedule_immediately (bool): If True, call immediately
+        
+        Returns:
+            list: List of call result dicts or None if failed
+        """
+        print(f"🚀 Making batch VAPI call to {len(customers)} customers")
+        print(f"🤖 Using Assistant ID: {assistant_id}")
+        print(f"🏢 Company caller ID: +1 (951) 247-2003")
+        
+        # Prepare customers array for VAPI
+        vapi_customers = []
+
+        # Prepare assistant overrides with customer-specific variables
+        # Use first customer's data for variable values (for batch calls)
+        first_customer = customers[0] if customers else {}
+
+        assistant_overrides = {
+            "variableValues": {
+                "company": first_customer.get('company', 'Customer'),
+                "amount_due": first_customer.get('amount_due', '0'),
+                "cancellation_date": first_customer.get('cancellation_date', ''),
+                "phone_number": first_customer.get('phone_number', ''),
+                "policy_number": first_customer.get('policy_number', ''),
+                "client_id": first_customer.get('client_id', '')
+            }
+        }
+
+        for customer in customers:
+            formatted_phone = format_phone_number(customer['phone_number'])
+
+            # Create customer context for VAPI
+            customer_context = {
+                "number": formatted_phone,
+                "name": customer.get('company', customer.get('insured', 'Customer'))
+            }
+
+            vapi_customers.append(customer_context)
+
+            print(f"   📞 {customer.get('company', 'Unknown')} - {formatted_phone}")
+            print(f"      Amount Due: ${customer.get('amount_due', 'N/A')}")
+            print(f"      Cancellation Date: {customer.get('cancellation_date', 'N/A')}")
+
+        # Prepare payload with the specified assistant
+        payload = {
+            "assistantId": assistant_id,
+            "phoneNumberId": self.phone_number_id,
+            "customers": vapi_customers,
+            "assistantOverrides": assistant_overrides
+        }
+        
+        # Add scheduling if not immediate
+        if not schedule_immediately:
+            schedule_time = datetime.now() + timedelta(hours=1)
+            payload["schedulePlan"] = {
+                "earliestAt": schedule_time.isoformat() + "Z"
+            }
+            print(f"⏰ Scheduled for: {schedule_time}")
+        else:
+            print(f"⚡ Calling immediately")
+        
+        try:
+            response = requests.post(
+                f"{self.base_url}/call",
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json"
+                },
+                json=payload
+            )
+            
+            print(f"📡 API Response Status: {response.status_code}")
+            
+            if response.status_code in [200, 201]:
+                call_data = response.json()
+                print(f"✅ Batch call initiated successfully")
+
+                # Extract call IDs from response
+                call_ids = self._extract_call_ids(call_data)
+
+                if not call_ids:
+                    print(f"❌ No call IDs found in response")
+                    return None
+
+                print(f"📞 Found {len(call_ids)} call(s)")
+                for i, call_id in enumerate(call_ids, 1):
+                    print(f"   Call {i}: {call_id}")
+
+                # If scheduled immediately, monitor the calls
+                if schedule_immediately:
+                    results = []
+
+                    for i, call_id in enumerate(call_ids, 1):
+                        print(f"\n📡 Monitoring call {i}/{len(call_ids)}: {call_id}")
+                        # Wait for call completion and get analysis
+                        final_call_data = self.wait_for_call_completion(call_id)
+
+                        if final_call_data:
+                            results.append(final_call_data)
+                        else:
+                            print(f"❌ Failed to get call completion data for call {i}")
+                            results.append(None)
+
+                    return results
+                else:
+                    # For scheduled calls, return the raw response data
+                    return [call_data] * len(customers)
+            else:
+                print(f"❌ API Error: {response.status_code}")
+                print(f"Response: {response.text}")
+                return None
+                
+        except Exception as e:
+            print(f"❌ Error making batch call: {e}")
+            import traceback
+            traceback.print_exc()
+            return None

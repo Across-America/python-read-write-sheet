@@ -169,6 +169,7 @@ class SmartsheetService:
             print(f"❌ Error updating Smartsheet: {e}")
             return False
     
+
     def _get_column_mapping(self, sheet):
         """Get column ID mapping"""
         columns = {}
@@ -181,6 +182,34 @@ class SmartsheetService:
                 columns['phone_number'] = col.id
             elif col.title == "Call Status":
                 columns['call_status'] = col.id
+            elif col.title == "Cancellation Date":
+                columns['cancellation_date'] = col.id
+            elif col.title == "Amount Due":
+                columns['amount_due'] = col.id
+            elif col.title == "Done?":
+                columns['done?'] = col.id
+            elif col.title == "F/U Date":
+                columns['f_u_date'] = col.id
+            elif col.title == "AI Call Summary":
+                columns['ai_call_summary'] = col.id
+            elif col.title == "AI Call Eval":
+                columns['ai_call_eval'] = col.id
+            elif col.title == "AI Call Stage":
+                columns['ai_call_stage'] = col.id
+            elif col.title == "Company":
+                columns['company'] = col.id
+            elif col.title == "Agent Name":
+                columns['agent_name'] = col.id
+            elif col.title == "Office":
+                columns['office'] = col.id
+            elif col.title == "Insured":
+                columns['insured'] = col.id
+            elif col.title == "LOB":
+                columns['lob'] = col.id
+            elif col.title == "Status":
+                columns['status'] = col.id
+            elif col.title == "Cancellation Reason":
+                columns['cancellation_reason'] = col.id
         return columns
     
     def _process_row(self, row, columns):
@@ -209,16 +238,27 @@ class SmartsheetService:
                 "row_id": row.id,
                 "call_status": call_status
             }
-            
-            # Add additional customer information
-            sheet = self.smart.Sheets.get_sheet(self.sheet_id)
-            for col in sheet.columns:
-                if col.title in ["Agent Name", "Office", "Insured", "LOB", "Status", 
-                                "Cancellation Reason", "Cancellation Date"]:
-                    cell = row.get_column(col.id)
+
+            # Add additional customer information using pre-mapped columns
+            additional_fields = {
+                'agent_name': 'agent_name',
+                'office': 'office',
+                'insured': 'insured',
+                'lob': 'lob',
+                'status': 'status',
+                'cancellation_reason': 'cancellation_reason',
+                'cancellation_date': 'cancellation_date',
+                'amount_due': 'amount_due',
+                'done?': 'done?',
+                'f_u_date': 'f_u_date'
+            }
+
+            for field_key, customer_key in additional_fields.items():
+                if field_key in columns:
+                    cell = row.get_column(columns[field_key])
                     value = str(cell.display_value) if cell.display_value else ""
-                    customer[col.title.lower().replace(" ", "_")] = value
-            
+                    customer[customer_key] = value
+
             return customer
         
         return None
@@ -303,3 +343,151 @@ class SmartsheetService:
         call_result_parts.append(f"COST: ${cost:.4f}")
         
         return " | ".join(call_result_parts)
+
+    def get_all_customers_with_stages(self):
+        """
+        Get all customers with their stage information (for multi-stage calling)
+        
+        Returns:
+            list: List of customer records with all fields including stages
+        """
+        try:
+            print("🔍 Loading all customers with stage information...")
+            sheet = self.smart.Sheets.get_sheet(self.sheet_id)
+            
+            customers = []
+            
+            # Process all rows
+            for row in sheet.rows:
+                customer = self._extract_all_row_data(row, sheet)
+                if customer:
+                    customers.append(customer)
+            
+            print(f"✅ Loaded {len(customers)} customer records")
+            return customers
+            
+        except Exception as e:
+            print(f"❌ Error loading customers: {e}")
+            return []
+    
+    def _extract_all_row_data(self, row, sheet):
+        """
+        Extract all data from a row (for stage-based processing)
+        
+        Args:
+            row: Smartsheet row object
+            sheet: Smartsheet sheet object
+        
+        Returns:
+            dict: All customer data or None if invalid
+        """
+        customer = {
+            "row_id": row.id,
+            "row_number": row.row_number
+        }
+        
+        # Extract all cells
+        for cell in row.cells:
+            # Find column title
+            col_title = None
+            col_type = None
+            
+            for col in sheet.columns:
+                if col.id == cell.column_id:
+                    col_title = col.title
+                    col_type = col.type
+                    break
+            
+            if col_title:
+                field_name = col_title.lower().replace(" ", "_").replace("/", "_")
+
+                # Handle checkbox columns specially
+                if col_type == 'CHECKBOX':
+                    value = cell.value if cell.value is not None else False
+                else:
+                    value = str(cell.display_value) if cell.display_value else ""
+                
+                customer[field_name] = value
+        
+        # Only return if has basic required fields for identification
+        if customer.get('row_id') and customer.get('row_number'):
+            return customer
+        
+        return None
+    
+    def update_customer_fields(self, customer, field_updates):
+        """
+        Update multiple fields for a customer
+        
+        Args:
+            customer (dict): Customer record with row_id
+            field_updates (dict): Dictionary of field_name: value pairs to update
+                Supported fields: ai_call_stage, ai_summary, ai_call_eval, 
+                                  followup_date, done, etc.
+        
+        Returns:
+            bool: Success status
+        """
+        try:
+            row_id = customer['row_id']
+            
+            print(f"📝 Updating row {customer.get('row_number')} with {len(field_updates)} fields...")
+            
+            # Get sheet and find column IDs
+            sheet = self.smart.Sheets.get_sheet(self.sheet_id)
+            
+            # Map field names to column IDs
+            column_map = {}
+            for col in sheet.columns:
+                field_name = col.title.lower().replace(" ", "_").replace("/", "_")
+                column_map[field_name] = {'id': col.id, 'type': col.type, 'title': col.title}
+            
+            # Prepare cells to update
+            cells_to_update = []
+            
+            for field_name, value in field_updates.items():
+                if field_name not in column_map:
+                    print(f"   ⚠️  Field '{field_name}' not found in sheet, skipping")
+                    continue
+                
+                col_info = column_map[field_name]
+                
+                cell = self.smart.models.Cell()
+                cell.column_id = col_info['id']
+                
+                # Handle different column types
+                if col_info['type'] == 'CHECKBOX':
+                    cell.value = bool(value)
+                elif col_info['type'] == 'DATE':
+                    # Ensure date is in correct format
+                    cell.value = str(value) if value else None
+                else:
+                    cell.value = str(value) if value is not None else ""
+                
+                cells_to_update.append(cell)
+                print(f"   • {col_info['title']}: {value}")
+            
+            if not cells_to_update:
+                print("   ⚠️  No valid cells to update")
+                return False
+            
+            # Create update row
+            updated_row = self.smart.models.Row()
+            updated_row.id = row_id
+            updated_row.cells = cells_to_update
+            
+            # Perform update
+            result = self.smart.Sheets.update_rows(self.sheet_id, [updated_row])
+            
+            if result.result:
+                print(f"   ✅ Successfully updated {len(cells_to_update)} fields")
+                return True
+            else:
+                print(f"   ❌ Update failed: {result}")
+                return False
+                
+        except Exception as e:
+            print(f"❌ Error updating customer fields: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
