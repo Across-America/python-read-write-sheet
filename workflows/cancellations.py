@@ -26,22 +26,23 @@ def is_weekend(date):
 def count_business_days(start_date, end_date):
     """
     Count business days between two dates (excluding weekends)
-    
+    Includes both start_date and end_date in the count
+
     Args:
         start_date: Starting date
         end_date: Ending date
-    
+
     Returns:
-        int: Number of business days
+        int: Number of business days (inclusive of both dates)
     """
     business_days = 0
     current_date = start_date
-    
-    while current_date < end_date:
+
+    while current_date <= end_date:
         if not is_weekend(current_date):
             business_days += 1
         current_date += timedelta(days=1)
-    
+
     return business_days
 
 
