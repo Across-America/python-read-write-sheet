@@ -62,19 +62,13 @@ def main():
     logger.info("=" * 80)
 
     # Only run if it's 4:00 PM hour (16:00) in Pacific time
-    # OR 10:35 AM (for testing scheduled runs)
     target_hour = 16  # 4:00 PM
-    is_test_time = (now_pacific.hour == 10 and now_pacific.minute >= 35)  # 10:35 AM test
 
-    if now_pacific.hour != target_hour and not is_test_time:
+    if now_pacific.hour != target_hour:
         logger.info(f"⏭️  Skipping: Current Pacific time is {now_pacific.strftime('%I:%M %p')}, not 4:00 PM")
         logger.info(f"   This is expected due to daylight saving time handling")
         logger.info("=" * 80)
         return 0
-
-    if is_test_time:
-        logger.info(f"🧪 TEST MODE: Running at {now_pacific.strftime('%I:%M %p')} Pacific")
-        logger.info("=" * 80)
 
     try:
         # Run the multi-stage batch calling workflow
