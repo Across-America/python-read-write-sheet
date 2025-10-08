@@ -100,33 +100,46 @@ def parse_date(date_str):
 def should_skip_row(customer):
     """
     Check if a row should be skipped based on initial validation rules
-    
+
     Skip if ANY of:
     - company is empty
-    - amount_due is empty  
+    - amount_due is empty
     - cancellation_date is empty
     - done is checked/true
-    
+    - cancellation_date is not after f_u_date
+
     Args:
         customer: Customer dict
-    
+
     Returns:
         tuple: (should_skip: bool, reason: str)
     """
     # Check done checkbox
     if customer.get('done?') in [True, 'true', 'True', 1]:
         return True, "Done checkbox is checked"
-    
+
     # Check required fields
     if not customer.get('company', '').strip():
         return True, "Company is empty"
-    
+
     if not customer.get('amount_due', '').strip():
         return True, "Amount Due is empty"
-    
+
     if not customer.get('cancellation_date', '').strip():
         return True, "Cancellation Date is empty"
-    
+
+    # Check date relationship: cancellation_date must be after f_u_date
+    f_u_date_str = customer.get('f_u_date', '').strip()
+    cancellation_date_str = customer.get('cancellation_date', '').strip()
+
+    if f_u_date_str and cancellation_date_str:
+        f_u_date = parse_date(f_u_date_str)
+        cancellation_date = parse_date(cancellation_date_str)
+
+        if f_u_date and cancellation_date:
+            if cancellation_date <= f_u_date:
+                return True, f"Cancellation Date ({cancellation_date}) is not after F/U Date ({f_u_date})"
+
     return False, ""
 
 
