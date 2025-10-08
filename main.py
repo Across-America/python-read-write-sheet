@@ -8,6 +8,7 @@ import sys
 import logging
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 from workflows.cancellations import run_multi_stage_batch_calling
 
 
@@ -48,12 +49,24 @@ def main():
     """Main entry point for cron job"""
     logger = setup_logging()
 
+    # Check if it's 4:00 PM Pacific time (handles DST automatically)
+    pacific_tz = ZoneInfo("America/Los_Angeles")
+    now_pacific = datetime.now(pacific_tz)
+
     logger.info("=" * 80)
     logger.info("🚀 Daily Cancellation Workflow Started")
     logger.info("=" * 80)
-    logger.info(f"📅 Date: {datetime.now().strftime('%Y-%m-%d')}")
-    logger.info(f"🕐 Time: {datetime.now().strftime('%H:%M:%S %Z')}")
+    logger.info(f"📅 Date: {now_pacific.strftime('%Y-%m-%d')}")
+    logger.info(f"🕐 Time (Pacific): {now_pacific.strftime('%H:%M:%S %Z')}")
+    logger.info(f"🕐 Time (UTC): {datetime.now(ZoneInfo('UTC')).strftime('%H:%M:%S %Z')}")
     logger.info("=" * 80)
+
+    # Only run if it's 4:00 PM hour (16:00) in Pacific time
+    if now_pacific.hour != 16:
+        logger.info(f"⏭️  Skipping: Current Pacific time is {now_pacific.strftime('%I:%M %p')}, not 4:00 PM")
+        logger.info(f"   This is expected due to daylight saving time handling")
+        logger.info("=" * 80)
+        return 0
 
     try:
         # Run the multi-stage batch calling workflow

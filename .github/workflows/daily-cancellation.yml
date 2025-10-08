@@ -2,22 +2,10 @@ name: Daily Cancellation Workflow
 
 on:
   schedule:
-    # ⚠️ IMPORTANT: GitHub Actions uses UTC time. PST/PDT requires manual adjustment!
-    #
-    # Current setting: "0 23 * * *" = UTC 23:00 (11:00 PM)
-    #
-    # Daylight Saving Time (March - November):
-    #   UTC 23:00 = PDT 4:00 PM ✅ (UTC-7)
-    #
-    # Standard Time (November - March):
-    #   UTC 23:00 = PST 3:00 PM ❌ (UTC-8)
-    #   Change to "0 0 * * *" for PST 4:00 PM
-    #
-    # Adjustment dates:
-    #   - Early November (DST ends): Change to "0 0 * * *"
-    #   - Early March (DST starts): Change back to "0 23 * * *"
-    #
-    - cron: "0 23 * * *"
+    # Run at both UTC 23:00 and UTC 00:00 to handle daylight saving time automatically
+    # Python code will check if it's 4:00 PM Pacific time and skip if not
+    - cron: "0 23 * * *"  # 4:00 PM PDT (daylight saving time)
+    - cron: "0 0 * * *"   # 4:00 PM PST (standard time)
   workflow_dispatch:  # Allow manual trigger from GitHub Actions UI
 
 jobs:
