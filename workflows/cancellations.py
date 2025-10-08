@@ -174,7 +174,7 @@ def calculate_next_followup_date(customer, current_stage):
     Returns:
         date or None: Next follow-up date
     """
-    followup_date_str = customer.get('followup_date', '')
+    followup_date_str = customer.get('f_u_date', '')
     cancellation_date_str = customer.get('cancellation_date', '')
     
     followup_date = parse_date(followup_date_str)
@@ -261,24 +261,24 @@ def get_customers_ready_for_calls(smartsheet_service):
             print(f"   ⏭️  Skipping row {customer.get('row_number')}: Call sequence complete (stage {stage})")
             continue
         
-        # Check followup_date
-        followup_date_str = customer.get('followup_date', '')
-        
-        # For stage 0, followup_date must not be empty
+        # Check f_u_date (Follow-up Date)
+        followup_date_str = customer.get('f_u_date', '')
+
+        # For stage 0, f_u_date must not be empty
         if stage == 0 and not followup_date_str.strip():
             skipped_count += 1
-            print(f"   ⏭️  Skipping row {customer.get('row_number')}: Stage 0 requires followup_date")
+            print(f"   ⏭️  Skipping row {customer.get('row_number')}: Stage 0 requires F/U Date")
             continue
-        
-        # Parse followup_date
+
+        # Parse f_u_date
         followup_date = parse_date(followup_date_str)
-        
+
         if not followup_date:
             skipped_count += 1
-            print(f"   ⏭️  Skipping row {customer.get('row_number')}: Invalid followup_date")
+            print(f"   ⏭️  Skipping row {customer.get('row_number')}: Invalid F/U Date")
             continue
-        
-        # Check if followup_date == today
+
+        # Check if f_u_date == today
         if followup_date == today:
             customers_by_stage[stage].append(customer)
             print(f"   ✅ Row {customer.get('row_number')}: Stage {stage}, ready for call")
@@ -304,80 +304,99 @@ def format_call_entry(summary, evaluation, call_number):
 def update_after_call(smartsheet_service, customer, call_data, current_stage):
     """
     Update Smartsheet after a successful call
-    
+
     Args:
         smartsheet_service: SmartsheetService instance
         customer: Customer dict
         call_data: Call result data from VAPI
         current_stage: Current stage (0, 1, or 2)
     """
-    print(f"\n📝 Updating Smartsheet after Stage {current_stage} call...")
-    
     # Extract call analysis
     analysis = call_data.get('analysis', {})
     summary = analysis.get('summary', 'No summary available')
-    evaluation = str(analysis.get('successEvaluation', 'N/A'))
-    
+
+    # Get evaluation with fallback to structured data
+    evaluation = analysis.get('successEvaluation')
+    if not evaluation:
+        # Try to get from structured data
+        structured_data = analysis.get('structuredData', {})
+        if structured_data:
+            evaluation = structured_data.get('success', 'N/A')
+        else:
+            evaluation = 'N/A'
+
+    evaluation = str(evaluation).lower()  # Normalize to lowercase for consistency
+
     # Determine new stage
     new_stage = current_stage + 1
-    
+
     # Calculate next followup date (None for stage 3)
     next_followup_date = calculate_next_followup_date(customer, current_stage)
-    
+
     # Determine if done (only for stage 3)
-    mark_done = (new_stage >= 3)
-    
+    # mark_done = (new_stage >= 3)  # Commented out - wait for manual verification
+
     # Format entries for appending
     call_number = current_stage + 1
     summary_entry, eval_entry = format_call_entry(summary, evaluation, call_number)
-    
+
     # Get existing values
     existing_summary = customer.get('ai_call_summary', '')
     existing_eval = customer.get('ai_call_eval', '')
-    
+
     # Append or create
     if existing_summary:
         new_summary = existing_summary + "\n---\n" + summary_entry
     else:
         new_summary = summary_entry
-    
+
     if existing_eval:
         new_eval = existing_eval + "\n---\n" + eval_entry
     else:
         new_eval = eval_entry
-    
+
     # Update fields
     updates = {
         'ai_call_stage': new_stage,
         'ai_call_summary': new_summary,
         'ai_call_eval': new_eval,
-        'done?': mark_done
+        # 'done?': mark_done  # Commented out - wait for manual verification
     }
-    
+
     if next_followup_date:
         updates['f_u_date'] = next_followup_date.strftime('%Y-%m-%d')
-    
+
     # Perform update
     success = smartsheet_service.update_customer_fields(customer, updates)
-    
+
     if success:
-        print(f"   ✅ Updated: Stage={new_stage}, Done={mark_done}")
+        print(f"✅ Smartsheet updated successfully")
+        print(f"   • Stage: {current_stage} → {new_stage}")
+        # print(f"   • Done: {mark_done}")  # Commented out - wait for manual verification
         if next_followup_date:
-            print(f"   📅 Next followup: {next_followup_date}")
-        else:
-            print(f"   🏁 Call sequence complete")
+            print(f"   • Next F/U Date: {next_followup_date}")
     else:
-        print(f"   ❌ Failed to update Smartsheet")
-    
+        print(f"❌ Smartsheet update failed")
+
     return success
 
 
-def run_multi_stage_batch_calling():
+def run_multi_stage_batch_calling(test_mode=False, schedule_at=None, auto_confirm=False):
     """
     Main function to run multi-stage batch calling
+
+    Args:
+        test_mode: If True, skip actual calls and Smartsheet updates (default: False)
+        schedule_at: Optional datetime to schedule calls (e.g., today at 4 PM)
+                    If None, calls are made immediately
+        auto_confirm: If True, skip user confirmation prompt (for cron jobs) (default: False)
     """
     print("=" * 80)
     print("🚀 MULTI-STAGE BATCH CALLING SYSTEM")
+    if test_mode:
+        print("🧪 TEST MODE - No actual calls or updates will be made")
+    if schedule_at:
+        print(f"⏰ SCHEDULED MODE - Calls will be scheduled for {schedule_at.strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 80)
     print("📋 Weekend-aware with stage-specific assistants")
     print("📞 3-stage calling: 1st Reminder → 2nd Reminder → Final Reminder")
@@ -415,54 +434,108 @@ def run_multi_stage_batch_calling():
                 print(f"   ... and {len(customers) - 5} more")
     
     print(f"\n{'=' * 80}")
-    print(f"⚠️  WARNING: This will make {total_customers} phone calls!")
-    print(f"💰 This will incur charges for each call")
+    if not test_mode:
+        print(f"⚠️  WARNING: This will make {total_customers} phone calls!")
+        print(f"💰 This will incur charges for each call")
+    else:
+        print(f"🧪 TEST MODE: Will simulate {total_customers} calls (no charges)")
     print(f"{'=' * 80}")
-    
-    response = input(f"\nProceed with multi-stage batch calling? (y/N): ").strip().lower()
-    
-    if response not in ['y', 'yes']:
-        print("❌ Batch calling cancelled")
-        return False
+
+    # Only ask for confirmation if not auto_confirm and not test_mode
+    if not test_mode and not auto_confirm:
+        response = input(f"\nProceed with multi-stage batch calling? (y/N): ").strip().lower()
+
+        if response not in ['y', 'yes']:
+            print("❌ Batch calling cancelled")
+            return False
+    elif auto_confirm:
+        print(f"🤖 AUTO-CONFIRM: Proceeding automatically (cron mode)")
     
     # Process each stage
     total_success = 0
     total_failed = 0
-    
+
     for stage in [0, 1, 2]:
         customers = customers_by_stage[stage]
-        
+
         if not customers:
             continue
-        
+
         stage_name = ["1st", "2nd", "3rd"][stage]
         assistant_id = get_assistant_id_for_stage(stage)
-        
+
         print(f"\n{'=' * 80}")
         print(f"📞 CALLING STAGE {stage} ({stage_name} Reminder) - {len(customers)} customers")
         print(f"🤖 Using Assistant: {assistant_id}")
         print(f"{'=' * 80}")
-        
-        # Make calls for this stage
-        results = vapi_service.make_batch_call_with_assistant(
-            customers, 
-            assistant_id,
-            schedule_immediately=True
-        )
-        
-        if results:
-            print(f"\n✅ Stage {stage} calls initiated successfully")
-            
-            # Update each customer after call
-            for customer, call_data in zip(customers, results):
-                if call_data:
-                    update_after_call(smartsheet_service, customer, call_data, stage)
-                    total_success += 1
-                else:
-                    total_failed += 1
+
+        if test_mode:
+            # Test mode: Simulate calls without actual API calls
+            print(f"\n🧪 TEST MODE: Simulating {len(customers)} calls...")
+            for customer in customers:
+                print(f"   ✅ [SIMULATED] Would call: {customer.get('company', 'Unknown')} - {customer.get('phone_number')}")
+                total_success += 1
         else:
-            print(f"\n❌ Stage {stage} calls failed")
-            total_failed += len(customers)
+            # Stage 0: Batch calling (all customers simultaneously)
+            if stage == 0:
+                print(f"📦 Batch calling mode (simultaneous)")
+                results = vapi_service.make_batch_call_with_assistant(
+                    customers,
+                    assistant_id,
+                    schedule_immediately=(schedule_at is None),
+                    schedule_at=schedule_at
+                )
+
+                if results:
+                    print(f"\n✅ Stage {stage} batch calls completed")
+
+                    # Only update Smartsheet if calls were immediate (not scheduled)
+                    if schedule_at is None:
+                        for customer, call_data in zip(customers, results):
+                            if call_data:
+                                update_after_call(smartsheet_service, customer, call_data, stage)
+                                total_success += 1
+                            else:
+                                total_failed += 1
+                    else:
+                        print(f"   ⏰ Calls scheduled - Smartsheet will be updated after calls complete")
+                        total_success += len(customers)
+                else:
+                    print(f"\n❌ Stage {stage} batch calls failed")
+                    total_failed += len(customers)
+
+            # Stage 1 & 2: Sequential calling (one customer at a time)
+            else:
+                print(f"🔄 Sequential calling mode (one at a time)")
+
+                for i, customer in enumerate(customers, 1):
+                    print(f"\n   📞 Call {i}/{len(customers)}: {customer.get('company', 'Unknown')}")
+
+                    results = vapi_service.make_batch_call_with_assistant(
+                        [customer],  # Only one customer at a time
+                        assistant_id,
+                        schedule_immediately=(schedule_at is None),
+                        schedule_at=schedule_at
+                    )
+
+                    if results and results[0]:
+                        call_data = results[0]
+
+                        # Only update Smartsheet if calls were immediate (not scheduled)
+                        if schedule_at is None:
+                            success = update_after_call(smartsheet_service, customer, call_data, stage)
+                            if success:
+                                total_success += 1
+                            else:
+                                total_failed += 1
+                        else:
+                            print(f"      ⏰ Call scheduled - Smartsheet will be updated after call completes")
+                            total_success += 1
+                    else:
+                        print(f"      ❌ Call {i} failed")
+                        total_failed += 1
+
+                print(f"\n✅ Stage {stage} sequential calls completed")
     
     # Final summary
     print(f"\n{'=' * 80}")
@@ -481,4 +554,9 @@ def run_multi_stage_batch_calling():
 # ========================================
 
 if __name__ == "__main__":
-    run_multi_stage_batch_calling()
+    import sys
+
+    # Check if test mode is requested
+    test_mode = "--test" in sys.argv or "-t" in sys.argv
+
+    run_multi_stage_batch_calling(test_mode=test_mode)

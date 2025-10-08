@@ -42,3 +42,10 @@ CANCELLATION_DEV_2_SHEET_ID = 7243781955866500
 DEFAULT_CHECK_INTERVAL = 15  # seconds
 DEFAULT_MAX_WAIT_TIME = 300  # seconds (5 minutes)
 ANALYSIS_WAIT_TIMEOUT = 180  # seconds (3 minutes)
+
+# ========================================
+# Testing Configuration
+# ========================================
+# Test phone number in E.164 format (+[country code][number])
+# Used for all test scripts to avoid real customer calls
+TEST_CUSTOMER_PHONE = "+13239435582"  # Valid test number for VAPI calls

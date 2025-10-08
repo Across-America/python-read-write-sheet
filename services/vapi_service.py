@@ -11,6 +11,118 @@ from config.settings import DEFAULT_CHECK_INTERVAL, DEFAULT_MAX_WAIT_TIME, ANALY
 from utils import format_phone_number
 
 
+def format_amount_for_speech(amount_str):
+    """
+    Convert amount string to natural speech format
+
+    Examples:
+        "$500.00" -> "five hundred dollars"
+        "500.00" -> "five hundred dollars"
+        "1234.56" -> "one thousand two hundred thirty-four dollars and fifty-six cents"
+
+    Args:
+        amount_str: Amount string (may include $ sign)
+
+    Returns:
+        str: Natural language amount
+    """
+    if not amount_str:
+        return "zero dollars"
+
+    # Remove $ and whitespace
+    clean_amount = str(amount_str).replace('$', '').replace(',', '').strip()
+
+    try:
+        # Parse to float
+        amount = float(clean_amount)
+
+        # Split into dollars and cents
+        dollars = int(amount)
+        cents = int(round((amount - dollars) * 100))
+
+        # Convert to words
+        dollar_words = number_to_words(dollars)
+
+        if cents == 0:
+            return f"{dollar_words} dollars"
+        else:
+            cent_words = number_to_words(cents)
+            return f"{dollar_words} dollars and {cent_words} cents"
+    except (ValueError, TypeError):
+        return amount_str  # Return original if parsing fails
+
+
+def number_to_words(n):
+    """Convert number to words (0-999999)"""
+    if n == 0:
+        return "zero"
+
+    ones = ["", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"]
+    teens = ["ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen",
+             "sixteen", "seventeen", "eighteen", "nineteen"]
+    tens = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"]
+
+    def convert_below_thousand(num):
+        if num == 0:
+            return ""
+        elif num < 10:
+            return ones[num]
+        elif num < 20:
+            return teens[num - 10]
+        elif num < 100:
+            return tens[num // 10] + ("-" + ones[num % 10] if num % 10 != 0 else "")
+        else:
+            return ones[num // 100] + " hundred" + (" " + convert_below_thousand(num % 100) if num % 100 != 0 else "")
+
+    if n < 1000:
+        return convert_below_thousand(n)
+    elif n < 1000000:
+        thousands = n // 1000
+        remainder = n % 1000
+        result = convert_below_thousand(thousands) + " thousand"
+        if remainder > 0:
+            result += " " + convert_below_thousand(remainder)
+        return result
+    else:
+        return str(n)  # Fallback for very large numbers
+
+
+def format_date_for_speech(date_str):
+    """
+    Convert date string to natural speech format
+
+    Examples:
+        "2025-10-27" -> "October 27, 2025"
+        "10/27/2025" -> "October 27, 2025"
+
+    Args:
+        date_str: Date string in various formats
+
+    Returns:
+        str: Natural language date
+    """
+    if not date_str:
+        return ""
+
+    # Try multiple date formats
+    formats = [
+        '%Y-%m-%d',
+        '%m/%d/%Y',
+        '%m/%d/%y',
+        '%Y/%m/%d'
+    ]
+
+    for fmt in formats:
+        try:
+            date_obj = datetime.strptime(str(date_str).strip(), fmt)
+            # Format as "October 27, 2025"
+            return date_obj.strftime('%B %d, %Y')
+        except ValueError:
+            continue
+
+    return date_str  # Return original if parsing fails
+
+
 class VAPIService:
     """Service for interacting with VAPI API"""
 
@@ -217,13 +329,30 @@ class VAPIService:
                 self._display_call_end_info(call_data)
                 call_ended = True
                 analysis_wait_start = time.time()
+
+                # Check if this is a no-answer scenario (no analysis expected)
+                end_reason = call_data.get('endedReason', '')
+                no_analysis_reasons = [
+                    'customer-did-not-answer',
+                    'customer-did-not-give-microphone-permission',
+                    'customer-busy',
+                    'voicemail',
+                    'assistant-error',
+                    'twilio-failed-to-connect-call'
+                ]
+
+                if end_reason in no_analysis_reasons:
+                    print(f"⚠️  Call ended without conversation ({end_reason})")
+                    print(f"📝 No analysis expected for this call type")
+                    return call_data
+
                 print(f"⏳ Call ended, waiting for VAPI analysis to complete...")
                 continue
-            
+
             # Check for analysis after call ended
             if call_ended:
                 analysis_elapsed = time.time() - analysis_wait_start
-                
+
                 if self._check_analysis_complete(call_data):
                     print(f"📝 Analysis completed after {int(analysis_elapsed)}s!")
                     return call_data
@@ -255,6 +384,20 @@ class VAPIService:
         print(f"✅ Call completed!")
         ended_reason = call_data.get('endedReason', 'unknown')
         duration = call_data.get('duration', 0)
+
+        # Calculate duration from timestamps if not provided
+        if duration == 0 or duration is None:
+            started_at = call_data.get('startedAt')
+            ended_at = call_data.get('endedAt')
+            if started_at and ended_at:
+                from datetime import datetime
+                try:
+                    start = datetime.fromisoformat(started_at.replace('Z', '+00:00'))
+                    end = datetime.fromisoformat(ended_at.replace('Z', '+00:00'))
+                    duration = (end - start).total_seconds()
+                except:
+                    pass
+
         cost = call_data.get('cost', 0)
         print(f"📋 End Reason: {ended_reason}")
         print(f"⏱️ Duration: {duration} seconds")
@@ -284,7 +427,22 @@ class VAPIService:
         print(f"📊 Final Status: {call_data.get('status', 'unknown')}")
         print(f"📋 End Reason: {call_data.get('endedReason', 'unknown')}")
         print(f"💰 Cost: ${call_data.get('cost', 0):.4f}")
-        print(f"⏱️ Duration: {call_data.get('duration', 0)} seconds")
+
+        # Calculate duration from timestamps if not provided
+        duration = call_data.get('duration', 0)
+        if duration == 0 or duration is None:
+            started_at = call_data.get('startedAt')
+            ended_at = call_data.get('endedAt')
+            if started_at and ended_at:
+                from datetime import datetime
+                try:
+                    start = datetime.fromisoformat(started_at.replace('Z', '+00:00'))
+                    end = datetime.fromisoformat(ended_at.replace('Z', '+00:00'))
+                    duration = (end - start).total_seconds()
+                except:
+                    pass
+
+        print(f"⏱️ Duration: {duration} seconds")
         
         # Show analysis
         analysis = call_data.get('analysis', {})
@@ -321,15 +479,16 @@ class VAPIService:
             print(transcript)
             print("-" * 40)
 
-    def make_batch_call_with_assistant(self, customers, assistant_id, schedule_immediately=True):
+    def make_batch_call_with_assistant(self, customers, assistant_id, schedule_immediately=True, schedule_at=None):
         """
         Make batch VAPI call with a specific assistant ID
-        
+
         Args:
             customers (list): List of customer records
             assistant_id (str): Specific assistant ID to use for this batch
-            schedule_immediately (bool): If True, call immediately
-        
+            schedule_immediately (bool): If True, call immediately (default: True)
+            schedule_at (datetime): Specific datetime to schedule the call (overrides schedule_immediately)
+
         Returns:
             list: List of call result dicts or None if failed
         """
@@ -347,8 +506,8 @@ class VAPIService:
         assistant_overrides = {
             "variableValues": {
                 "company": first_customer.get('company', 'Customer'),
-                "amount_due": first_customer.get('amount_due', '0'),
-                "cancellation_date": first_customer.get('cancellation_date', ''),
+                "amount_due": format_amount_for_speech(first_customer.get('amount_due', '0')),
+                "cancellation_date": format_date_for_speech(first_customer.get('cancellation_date', '')),
                 "phone_number": first_customer.get('phone_number', ''),
                 "policy_number": first_customer.get('policy_number', ''),
                 "client_id": first_customer.get('client_id', '')
@@ -366,8 +525,13 @@ class VAPIService:
 
             vapi_customers.append(customer_context)
 
+            # Format amount for display (remove $ if already present)
+            amount_display = customer.get('amount_due', 'N/A')
+            if amount_display and not str(amount_display).startswith('$'):
+                amount_display = f"${amount_display}"
+
             print(f"   📞 {customer.get('company', 'Unknown')} - {formatted_phone}")
-            print(f"      Amount Due: ${customer.get('amount_due', 'N/A')}")
+            print(f"      Amount Due: {amount_display}")
             print(f"      Cancellation Date: {customer.get('cancellation_date', 'N/A')}")
 
         # Prepare payload with the specified assistant
@@ -377,14 +541,21 @@ class VAPIService:
             "customers": vapi_customers,
             "assistantOverrides": assistant_overrides
         }
-        
-        # Add scheduling if not immediate
-        if not schedule_immediately:
+
+        # Add scheduling if specified
+        if schedule_at:
+            # Use specific datetime if provided
+            payload["schedulePlan"] = {
+                "earliestAt": schedule_at.isoformat() + "Z"
+            }
+            print(f"⏰ Scheduled for: {schedule_at.strftime('%Y-%m-%d %H:%M:%S')}")
+        elif not schedule_immediately:
+            # Default to 1 hour from now if not immediate
             schedule_time = datetime.now() + timedelta(hours=1)
             payload["schedulePlan"] = {
                 "earliestAt": schedule_time.isoformat() + "Z"
             }
-            print(f"⏰ Scheduled for: {schedule_time}")
+            print(f"⏰ Scheduled for: {schedule_time.strftime('%Y-%m-%d %H:%M:%S')}")
         else:
             print(f"⚡ Calling immediately")
         
@@ -415,8 +586,8 @@ class VAPIService:
                 for i, call_id in enumerate(call_ids, 1):
                     print(f"   Call {i}: {call_id}")
 
-                # If scheduled immediately, monitor the calls
-                if schedule_immediately:
+                # If scheduled immediately (and not scheduled for future), monitor the calls
+                if schedule_immediately and not schedule_at:
                     results = []
 
                     for i, call_id in enumerate(call_ids, 1):

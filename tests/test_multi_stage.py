@@ -5,6 +5,9 @@ Quick test to show customers ready for each stage
 """
 
 import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from datetime import datetime
 from services.smartsheet_service import SmartsheetService
 from config import CANCELLATION_SHEET_ID
