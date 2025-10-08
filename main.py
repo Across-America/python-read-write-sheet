@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Daily Cancellation Workflow - Main Entry Point
+AAIS Automated Workflow System - Main Entry Point
 Designed to run as a cron job at PST 4:00 PM daily
+Supports multiple workflow types: cancellations, billing notifications, etc.
 """
 
 import sys
@@ -54,7 +55,7 @@ def main():
     now_pacific = datetime.now(pacific_tz)
 
     logger.info("=" * 80)
-    logger.info("🚀 Daily Cancellation Workflow Started")
+    logger.info("🚀 AAIS Automated Workflow System Started")
     logger.info("=" * 80)
     logger.info(f"📅 Date: {now_pacific.strftime('%Y-%m-%d')}")
     logger.info(f"🕐 Time (Pacific): {now_pacific.strftime('%H:%M:%S %Z')}")
@@ -80,7 +81,7 @@ def main():
 
         if success:
             logger.info("=" * 80)
-            logger.info("✅ Daily Cancellation Workflow Completed Successfully")
+            logger.info("✅ AAIS Automated Workflow Completed Successfully")
             logger.info("=" * 80)
 
             # Cleanup old logs
@@ -89,7 +90,7 @@ def main():
             return 0
         else:
             logger.error("=" * 80)
-            logger.error("❌ Daily Cancellation Workflow Failed")
+            logger.error("❌ AAIS Automated Workflow Failed")
             logger.error("=" * 80)
             return 1
 
