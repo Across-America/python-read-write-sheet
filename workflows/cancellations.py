@@ -4,6 +4,7 @@ Implements 3-stage calling system with business day calculations
 """
 
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from services import VAPIService, SmartsheetService
 from config import (
     CANCELLATION_SHEET_ID,
@@ -243,18 +244,22 @@ def calculate_next_followup_date(customer, current_stage):
 def get_customers_ready_for_calls(smartsheet_service):
     """
     Get all customers ready for calls today based on stage logic
-    
+
     Returns:
         dict: Customers grouped by stage {0: [...], 1: [...], 2: [...]}
     """
     print("=" * 80)
     print("🔍 FETCHING CUSTOMERS READY FOR CALLS")
     print("=" * 80)
-    
+
     # Get all customers from sheet
     all_customers = smartsheet_service.get_all_customers_with_stages()
-    
-    today = datetime.now().date()
+
+    # Use Pacific Time for "today" to ensure consistent behavior across environments
+    pacific_tz = ZoneInfo("America/Los_Angeles")
+    today = datetime.now(pacific_tz).date()
+    print(f"📅 Today (Pacific Time): {today}")
+
     customers_by_stage = {0: [], 1: [], 2: []}
     skipped_count = 0
     
