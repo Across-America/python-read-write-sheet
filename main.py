@@ -62,14 +62,21 @@ def main():
     logger.info(f"🕐 Time (UTC): {datetime.now(ZoneInfo('UTC')).strftime('%H:%M:%S %Z')}")
     logger.info("=" * 80)
 
-    # Only run if it's 4:00 PM hour (16:00) in Pacific time
-    target_hour = 16  # 4:00 PM
+    # Check if manually triggered via GitHub Actions
+    import os
+    is_manual_trigger = os.getenv('GITHUB_EVENT_NAME') == 'workflow_dispatch'
 
-    if now_pacific.hour != target_hour:
-        logger.info(f"⏭️  Skipping: Current Pacific time is {now_pacific.strftime('%I:%M %p')}, not 4:00 PM")
-        logger.info(f"   This is expected due to daylight saving time handling")
-        logger.info("=" * 80)
-        return 0
+    if is_manual_trigger:
+        logger.info("🖱️  Manual trigger detected (workflow_dispatch) - skipping time check")
+    else:
+        # Only run if it's 4:00 PM hour (16:00) in Pacific time
+        target_hour = 16  # 4:00 PM
+
+        if now_pacific.hour != target_hour:
+            logger.info(f"⏭️  Skipping: Current Pacific time is {now_pacific.strftime('%I:%M %p')}, not 4:00 PM")
+            logger.info(f"   This is expected due to daylight saving time handling")
+            logger.info("=" * 80)
+            return 0
 
     try:
         # Run the multi-stage batch calling workflow
