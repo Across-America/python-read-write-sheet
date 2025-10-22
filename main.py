@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from workflows.cancellations import run_multi_stage_batch_calling
+from workflows.renewals import run_renewal_batch_calling
 
 
 # Setup logging
@@ -79,12 +80,30 @@ def main():
             return 0
 
     try:
-        # Run the multi-stage batch calling workflow
-        success = run_multi_stage_batch_calling(
-            test_mode=False,      # Production mode
-            schedule_at=None,     # Call immediately
-            auto_confirm=True     # Skip confirmation (cron mode)
-        )
+        # Determine which workflow to run based on environment variable
+        import os
+        workflow_type = os.getenv('WORKFLOW_TYPE', 'cancellations')
+        
+        if workflow_type == 'cancellations':
+            logger.info("🔄 Running Cancellation Workflow")
+            # Run the multi-stage batch calling workflow
+            success = run_multi_stage_batch_calling(
+                test_mode=False,      # Production mode
+                schedule_at=None,     # Call immediately
+                auto_confirm=True     # Skip confirmation (cron mode)
+            )
+        elif workflow_type == 'renewals':
+            logger.info("🔄 Running Renewal Workflow")
+            # Run the renewal batch calling workflow
+            success = run_renewal_batch_calling(
+                test_mode=False,      # Production mode
+                schedule_at=None,     # Call immediately
+                auto_confirm=True     # Skip confirmation (cron mode)
+            )
+        else:
+            logger.error(f"❌ Unknown workflow type: {workflow_type}")
+            logger.error("   Supported types: 'cancellations', 'renewals'")
+            return 1
 
         if success:
             logger.info("=" * 80)

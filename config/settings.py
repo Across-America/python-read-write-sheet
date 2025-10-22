@@ -36,6 +36,23 @@ CANCELLATION_DEV_SHEET_ID = 5146141873098628
 CANCELLATION_DEV_2_SHEET_ID = 7243781955866500
 
 # ========================================
+# Renewal Workflow Configuration
+# ========================================
+# Renewal Assistant IDs (to be configured)
+RENEWAL_1ST_REMINDER_ASSISTANT_ID = "your_renewal_1st_assistant_id"  # TODO: Get from VAPI
+RENEWAL_2ND_REMINDER_ASSISTANT_ID = "your_renewal_2nd_assistant_id"  # TODO: Get from VAPI
+RENEWAL_3RD_REMINDER_ASSISTANT_ID = "your_renewal_3rd_assistant_id"  # TODO: Get from VAPI
+
+# Renewal Sheet Configuration
+RENEWAL_WORKSPACE_NAME = "ASI"
+RENEWAL_SHEET_NAME_PATTERN = "Personal Line - {month_year}"  # e.g., "Personal Line - Nov 2024"
+
+# Renewal Timeline Configuration (based on UW team feedback)
+# Contact schedule: 2 weeks before, 1 week before, 1 day before, day of expiry
+RENEWAL_CALLING_SCHEDULE = [14, 7, 1, 0]  # Days before expiry to call
+RENEWAL_CALLING_START_DAY = 1   # Start calling on 1st of each month
+
+# ========================================
 # Call Monitoring Configuration
 # ========================================
 DEFAULT_CHECK_INTERVAL = 15  # seconds
