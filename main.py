@@ -12,6 +12,10 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 from workflows.cancellations import run_multi_stage_batch_calling
 from workflows.renewals import run_renewal_batch_calling
+from workflows.cross_sells import run_cross_sells_calling
+from workflows.non_renewals import run_non_renewals_calling
+from workflows.direct_bill import run_direct_bill_batch_calling
+from workflows.mortgage_bill import run_mortgage_bill_calling
 
 
 # Setup logging
@@ -85,24 +89,56 @@ def main():
         workflow_type = os.getenv('WORKFLOW_TYPE', 'cancellations')
         
         if workflow_type == 'cancellations':
-            logger.info("🔄 Running Cancellation Workflow")
-            # Run the multi-stage batch calling workflow
+            logger.info("🔄 Running CL1 Project - Cancellation Workflow")
+            # Run the multi-stage batch calling workflow (CL1 Project)
             success = run_multi_stage_batch_calling(
                 test_mode=False,      # Production mode
                 schedule_at=None,     # Call immediately
                 auto_confirm=True     # Skip confirmation (cron mode)
             )
         elif workflow_type == 'renewals':
-            logger.info("🔄 Running Renewal Workflow")
-            # Run the renewal batch calling workflow
+            logger.info("🔄 Running N1 Project - Renewal Workflow")
+            # Run the renewal batch calling workflow (N1 Project)
             success = run_renewal_batch_calling(
+                test_mode=False,      # Production mode
+                schedule_at=None,     # Call immediately
+                auto_confirm=True     # Skip confirmation (cron mode)
+            )
+        elif workflow_type == 'cross_sells':
+            logger.info("🔄 Running N1 Project - Cross-Sells Workflow")
+            # Run the cross-sells calling workflow (N1 Project)
+            success = run_cross_sells_calling(
+                test_mode=False,      # Production mode
+                schedule_at=None,     # Call immediately
+                auto_confirm=True     # Skip confirmation (cron mode)
+            )
+        elif workflow_type == 'non_renewals':
+            logger.info("🔄 Running N1 Project - Non-Renewals Workflow")
+            # Run the non-renewals calling workflow (N1 Project)
+            success = run_non_renewals_calling(
+                test_mode=False,      # Production mode
+                schedule_at=None,     # Call immediately
+                auto_confirm=True     # Skip confirmation (cron mode)
+            )
+        elif workflow_type == 'direct_bill':
+            logger.info("🔄 Running N1 Project - Direct Bill Workflow")
+            # Run the direct bill batch calling workflow (N1 Project)
+            success = run_direct_bill_batch_calling(
+                test_mode=False,      # Production mode
+                schedule_at=None,     # Call immediately
+                auto_confirm=True     # Skip confirmation (cron mode)
+            )
+        elif workflow_type == 'mortgage_bill':
+            logger.info("🔄 Running Mortgage Bill Workflow")
+            # Run the mortgage bill calling workflow
+            success = run_mortgage_bill_calling(
                 test_mode=False,      # Production mode
                 schedule_at=None,     # Call immediately
                 auto_confirm=True     # Skip confirmation (cron mode)
             )
         else:
             logger.error(f"❌ Unknown workflow type: {workflow_type}")
-            logger.error("   Supported types: 'cancellations', 'renewals'")
+            logger.error("   Supported types: 'cancellations', 'renewals', 'cross_sells', 'non_renewals', 'direct_bill', 'mortgage_bill'")
             return 1
 
         if success:
