@@ -479,7 +479,7 @@ class VAPIService:
             print(transcript)
             print("-" * 40)
 
-    def make_batch_call_with_assistant(self, customers, assistant_id, schedule_immediately=True, schedule_at=None):
+    def make_batch_call_with_assistant(self, customers, assistant_id, schedule_immediately=True, schedule_at=None, max_retries=3):
         """
         Make batch VAPI call with a specific assistant ID
 
@@ -559,59 +559,95 @@ class VAPIService:
         else:
             print(f"⚡ Calling immediately")
         
-        try:
-            response = requests.post(
-                f"{self.base_url}/call",
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json"
-                },
-                json=payload
-            )
-            
-            print(f"📡 API Response Status: {response.status_code}")
-            
-            if response.status_code in [200, 201]:
-                call_data = response.json()
-                print(f"✅ Batch call initiated successfully")
-
-                # Extract call IDs from response
-                call_ids = self._extract_call_ids(call_data)
-
-                if not call_ids:
-                    print(f"❌ No call IDs found in response")
-                    return None
-
-                print(f"📞 Found {len(call_ids)} call(s)")
-                for i, call_id in enumerate(call_ids, 1):
-                    print(f"   Call {i}: {call_id}")
-
-                # If scheduled immediately (and not scheduled for future), monitor the calls
-                if schedule_immediately and not schedule_at:
-                    results = []
-
-                    for i, call_id in enumerate(call_ids, 1):
-                        print(f"\n📡 Monitoring call {i}/{len(call_ids)}: {call_id}")
-                        # Wait for call completion and get analysis
-                        final_call_data = self.wait_for_call_completion(call_id)
-
-                        if final_call_data:
-                            results.append(final_call_data)
-                        else:
-                            print(f"❌ Failed to get call completion data for call {i}")
-                            results.append(None)
-
-                    return results
-                else:
-                    # For scheduled calls, return the raw response data
-                    return [call_data] * len(customers)
-            else:
-                print(f"❌ API Error: {response.status_code}")
-                print(f"Response: {response.text}")
-                return None
+        # Retry logic for API calls
+        import time
+        for attempt in range(max_retries):
+            try:
+                response = requests.post(
+                    f"{self.base_url}/call",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json"
+                    },
+                    json=payload,
+                    timeout=30  # 30 second timeout
+                )
                 
-        except Exception as e:
-            print(f"❌ Error making batch call: {e}")
-            import traceback
-            traceback.print_exc()
-            return None
+                print(f"📡 API Response Status: {response.status_code}")
+                
+                if response.status_code in [200, 201]:
+                    call_data = response.json()
+                    print(f"✅ Batch call initiated successfully")
+
+                    # Extract call IDs from response
+                    call_ids = self._extract_call_ids(call_data)
+
+                    if not call_ids:
+                        print(f"❌ No call IDs found in response")
+                        return None
+
+                    print(f"📞 Found {len(call_ids)} call(s)")
+                    for i, call_id in enumerate(call_ids, 1):
+                        print(f"   Call {i}: {call_id}")
+
+                    # If scheduled immediately (and not scheduled for future), monitor the calls
+                    if schedule_immediately and not schedule_at:
+                        results = []
+
+                        for i, call_id in enumerate(call_ids, 1):
+                            print(f"\n📡 Monitoring call {i}/{len(call_ids)}: {call_id}")
+                            # Wait for call completion and get analysis
+                            final_call_data = self.wait_for_call_completion(call_id)
+
+                            if final_call_data:
+                                results.append(final_call_data)
+                            else:
+                                print(f"❌ Failed to get call completion data for call {i}")
+                                results.append(None)
+
+                        return results
+                    else:
+                        # For scheduled calls, return the raw response data
+                        return [call_data] * len(customers)
+                elif response.status_code >= 500:
+                    # Server error - retryable
+                    if attempt < max_retries - 1:
+                        wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                        print(f"⚠️  VAPI API server error ({response.status_code}). Retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries})")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        print(f"❌ VAPI API error after {max_retries} attempts: {response.status_code}")
+                        print(f"Response: {response.text}")
+                        return None
+                else:
+                    # Client error (4xx) - not retryable
+                    print(f"❌ VAPI API client error: {response.status_code}")
+                    print(f"Response: {response.text}")
+                    return None
+                    
+            except requests.exceptions.Timeout:
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt
+                    print(f"⚠️  Request timeout. Retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    print(f"❌ Request timeout after {max_retries} attempts")
+                    return None
+            except requests.exceptions.ConnectionError as e:
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt
+                    print(f"⚠️  Connection error. Retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    print(f"❌ Connection error after {max_retries} attempts: {e}")
+                    return None
+            except Exception as e:
+                print(f"❌ Error making batch call: {e}")
+                import traceback
+                traceback.print_exc()
+                return None
+        
+        return None

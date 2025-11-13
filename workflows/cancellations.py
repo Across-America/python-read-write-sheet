@@ -1,6 +1,9 @@
 """
+CL1 Project - Cancellation Workflow
 Multi-Stage Batch Calling Workflows - Weekend-Aware with Stage-Specific Assistants
 Implements 3-stage calling system with business day calculations
+
+Note: This workflow is part of the CL1 Project (Cancellation workflow).
 """
 
 from datetime import datetime, timedelta
@@ -411,13 +414,13 @@ def run_multi_stage_batch_calling(test_mode=False, schedule_at=None, auto_confir
         auto_confirm: If True, skip user confirmation prompt (for cron jobs) (default: False)
     """
     print("=" * 80)
-    print("🚀 MULTI-STAGE BATCH CALLING SYSTEM")
+    print("🚀 CL1 PROJECT - MULTI-STAGE BATCH CALLING SYSTEM")
     if test_mode:
         print("🧪 TEST MODE - No actual calls or updates will be made")
     if schedule_at:
         print(f"⏰ SCHEDULED MODE - Calls will be scheduled for {schedule_at.strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 80)
-    print("📋 Weekend-aware with stage-specific assistants")
+    print("📋 CL1 Project: Weekend-aware with stage-specific assistants")
     print("📞 3-stage calling: 1st Reminder → 2nd Reminder → Final Reminder")
     print("=" * 80)
     

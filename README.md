@@ -22,12 +22,21 @@ Automated calling workflows system powered by VAPI and Smartsheet integration. S
 │   ├── smartsheet_service.py
 │   └── vapi_service.py
 ├── workflows/           # Business workflows
-│   └── cancellations.py
+│   ├── cancellations.py  # CL1 Project - Cancellation
+│   ├── renewals.py       # N1 Project - Renewal
+│   ├── non_renewals.py   # N1 Project - Non-Renewal
+│   ├── direct_bill.py    # Direct Bill
+│   ├── mortgage_bill.py  # Mortgage Bill
+│   └── cross_sells.py    # Cross-Sells
 ├── utils/              # Utility functions
-├── tests/              # Test files
+├── tests/              # Formal test files
+├── scripts/            # Temporary test/utility scripts
+├── docs/               # Documentation files
 ├── main.py             # Entry point (cron job)
 └── .env               # Environment variables
 ```
+
+See [REPO_STRUCTURE.md](REPO_STRUCTURE.md) for detailed structure explanation.
 
 ## Quick Start
 
@@ -145,9 +154,22 @@ All test files are in the `tests/` directory:
 - `test_followup_date_calculation.py` - Date calculation test
 - `cleanup_test_data.py` - Clean up test data
 
+## Available Workflows
+
+The system supports multiple workflow types, selectable via `WORKFLOW_TYPE` environment variable:
+
+1. **Cancellations** (`cancellations`) - 3-stage cancellation reminders
+2. **Renewals** (`renewals`) - Policy renewal notifications (4 stages)
+3. **Cross-Sells** (`cross_sells`) - Auto quote offers for monoline home policies
+4. **Non-Renewals** (`non_renewals`) - Non-renewal notifications and re-quoting
+5. **Direct Bill** (`direct_bill`) - Payment reminders for direct billed policies (3 stages)
+6. **Mortgage Bill** (`mortgage_bill`) - Payment reminders for mortgage billed policies (single call)
+
 ## Workflow Details
 
-### Daily Execution Flow
+### Cancellations Workflow
+
+#### Daily Execution Flow
 
 1. **4:00 PM Pacific Time** - Automated trigger
 2. **Fetch Customers** - Get customers ready for calls today (`f_u_date` = today)
@@ -199,7 +221,7 @@ All test files are in the `tests/` directory:
 - F/U dates guaranteed to fall on business days
 - All date calculations exclude weekends
 
-### Updated Fields
+### Updated Fields (Cancellations)
 
 After each call:
 - `ai_call_stage`: +1
@@ -207,6 +229,78 @@ After each call:
 - `ai_call_eval`: Appends evaluation result
 - `f_u_date`: Next follow-up date (empty after Stage 3)
 - ~~`done?`~~: Auto-marking disabled, awaits manual review
+
+### Renewals Workflow
+
+**Purpose**: Policy renewal notifications with 4-stage calling schedule
+
+**Calling Schedule**: 14 days before, 7 days before, 1 day before, day of expiry
+
+**Key Features**:
+- Dynamic sheet discovery (monthly sheets like "11. November PLR DEV")
+- Only calls starting on the 1st of each month
+- Uses `Expiration Date` column for timeline calculation
+- Filters by `Renewal / Non-Renewal` status
+
+**Required Columns**:
+- `Expiration Date` - Policy expiration date
+- `Renewal / Non-Renewal` - Renewal status
+- `Payee` - Payment method
+- `Status` - Policy status
+- `Client Phone Number` - Customer phone number
+
+### Cross-Sells Workflow
+
+**Purpose**: Courtesy outreach to monoline home policy customers to offer auto quote
+
+**Key Features**:
+- Single call workflow
+- Filters for home policy customers only
+- Uses `CROSS_SELLS_ASSISTANT_ID`
+
+### Non-Renewals Workflow
+
+**Purpose**: Notify customers about non-renewal and re-quoting process
+
+**Key Features**:
+- Single call workflow
+- Filters for `Renewal / Non-Renewal = "Non-Renewal"`
+- Uses `NON_RENEWALS_ASSISTANT_ID`
+
+### Direct Bill Workflow
+
+**Purpose**: Payment reminders for direct billed policies
+
+**Calling Schedule**: 14 days before, 7 days before, day of (if payment not made)
+
+**Key Features**:
+- 3-stage calling system
+- Stage 0 (14 days before): Batch calling
+- Stage 1 (7 days before): Sequential calling
+- Stage 2 (day of): Sequential calling (only if payment not made)
+- Automatically skips EFT policies (no follow-ups needed)
+- Checks `payment_status` to skip if already paid
+
+**Required Columns**:
+- `payment_due_date` or `due_date` - Payment due date
+- `payee` - Must contain "Direct Bill"
+- `payment_status` - Payment status (checked on day of)
+
+### Mortgage Bill Workflow
+
+**Purpose**: Payment reminders for mortgage billed policies
+
+**Key Features**:
+- Single call workflow
+- Only calls on day of payment due (or if overdue)
+- Only calls if payment not made
+- Filters for `payee` containing "Mortgage"
+- Uses `MORTGAGE_BILL_1ST_REMAINDER_ASSISTANT_ID`
+
+**Required Columns**:
+- `payment_due_date` or `due_date` - Payment due date
+- `payee` - Must contain "Mortgage"
+- `payment_status` - Payment status (must not be "paid" or "received")
 
 ## Logs
 

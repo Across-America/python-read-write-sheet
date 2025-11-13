@@ -89,3 +89,19 @@ ENV/
 
 # Rope project settings
 .ropeproject
+
+# Temporary scripts and test files (moved to scripts/)
+# Keep these patterns for any remaining temp files
+scripts/*.ps1
+scripts/test_*.py
+scripts/check_*.py
+scripts/run_*.py
+scripts/show_*.py
+scripts/list_*.py
+scripts/deploy_*.py
+scripts/update_*.py
+scripts/setup_*.py
+
+# Documentation (moved to docs/)
+# Keep main README.md in root
+docs/*.md
