@@ -60,9 +60,12 @@ RENEWAL_3RD_REMINDER_ASSISTANT_ID = "7a046871-6d1d-470b-b7a4-6856a85391aa"  # 3r
 # Cross-Sells Assistant ID (for monoline home policy customers - offer auto quote)
 CROSS_SELLS_ASSISTANT_ID = "your_cross_sells_assistant_id"  # TODO: Get from VAPI
 
-# Non-Renewals Assistant ID (notify customers about non-renewal and re-quoting)
-# Shared with Direct Bill 3rd Reminder (day of payment due)
-NON_RENEWALS_ASSISTANT_ID = DIRECT_BILL_3RD_REMAINDER_ASSISTANT_ID  # Shared with Direct Bill Stage 2 (day of)
+# Non-Renewals Assistant IDs (notify customers about non-renewal and re-quoting)
+NON_RENEWAL_1ST_REMINDER_ASSISTANT_ID = "a56a5740-68ee-4dbc-95a9-8619c5aa2689"  # 1st & 2nd Reminder (14 days & 7 days before)
+NON_RENEWAL_2ND_REMINDER_ASSISTANT_ID = "a56a5740-68ee-4dbc-95a9-8619c5aa2689"  # Same as 1st (reuse same Assistant)
+NON_RENEWAL_3RD_REMINDER_ASSISTANT_ID = "cc41f0eb-bc92-4b7b-8fc9-1b1ba14c74f9"  # 3rd Reminder (1 day before)
+# Legacy: Keep for backward compatibility
+NON_RENEWALS_ASSISTANT_ID = NON_RENEWAL_3RD_REMINDER_ASSISTANT_ID
 
 # N1 Project Sheet Configuration (Renewal Sheet)
 # All N1 Project workflows use this sheet
