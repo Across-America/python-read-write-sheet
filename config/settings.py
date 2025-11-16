@@ -39,7 +39,7 @@ CANCELLATION_DEV_2_SHEET_ID = 7243781955866500
 # Call Monitoring Configuration
 # ========================================
 DEFAULT_CHECK_INTERVAL = 15  # seconds
-DEFAULT_MAX_WAIT_TIME = 300  # seconds (5 minutes)
+DEFAULT_MAX_WAIT_TIME = 600  # seconds (10 minutes) - Increased to handle Vapi queue delays during high load
 ANALYSIS_WAIT_TIMEOUT = 180  # seconds (3 minutes)
 
 # ========================================

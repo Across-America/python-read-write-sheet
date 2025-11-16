@@ -306,7 +306,9 @@ class VAPIService:
         start_time = time.time()
         call_ended = False
         analysis_wait_start = 0
-        
+        last_status = None  # Track status changes
+        queue_warning_shown = False  # Track if queue warning was shown
+
         while True:
             # Check timeout
             elapsed_time = time.time() - start_time
@@ -322,8 +324,26 @@ class VAPIService:
                 continue
             
             status = call_data.get('status', 'unknown')
-            print(f"📊 Call Status: {status} (elapsed: {int(elapsed_time)}s)")
-            
+
+            # Log status change if it changed
+            if status != last_status and last_status is not None:
+                print(f"🔄 Status changed: {last_status} → {status}")
+            last_status = status
+
+            # Display status-specific messages
+            if status == 'queued':
+                print(f"📋 Call queued, waiting for provisioning... ({int(elapsed_time)}s elapsed)")
+                # Warn if queue time is unusually long
+                if elapsed_time > 120 and not queue_warning_shown:
+                    print(f"⚠️  Call has been queued for over 2 minutes - API may be experiencing high load")
+                    queue_warning_shown = True
+            elif status == 'ringing':
+                print(f"📞 Call ringing... ({int(elapsed_time)}s elapsed)")
+            elif status == 'in_progress':
+                print(f"🗣️  Call in progress... ({int(elapsed_time)}s elapsed)")
+            elif status != 'ended':
+                print(f"📊 Call status: {status} ({int(elapsed_time)}s elapsed)")
+
             # Check if call ended
             if status == 'ended' and not call_ended:
                 self._display_call_end_info(call_data)
@@ -363,9 +383,8 @@ class VAPIService:
                     print(f"⏳ Analysis still processing... ({int(analysis_elapsed)}s elapsed)")
                     time.sleep(check_interval)
                     continue
-            
-            # Call still active
-            print(f"⏳ Call still active. Checking again in {check_interval}s...")
+
+            # Call still active - wait before next check
             time.sleep(check_interval)
     
     def _extract_call_ids(self, result):
