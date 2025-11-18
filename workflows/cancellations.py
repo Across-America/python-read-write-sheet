@@ -513,11 +513,52 @@ def run_multi_stage_batch_calling(test_mode=False, schedule_at=None, auto_confir
 
                     # Only update Smartsheet if calls were immediate (not scheduled)
                     if schedule_at is None:
-                        for customer, call_data in zip(customers, results):
-                            if call_data:
-                                update_after_call(smartsheet_service, customer, call_data, stage)
-                                total_success += 1
+                        # Check if results length matches customers length
+                        if len(results) != len(customers):
+                            print(f"   ⚠️  Warning: Results count ({len(results)}) doesn't match customers count ({len(customers)})")
+                        
+                        for i, customer in enumerate(customers):
+                            # Get corresponding call_data (handle different result structures)
+                            if i < len(results):
+                                call_data = results[i]
                             else:
+                                # If results length doesn't match, try to get from first result
+                                call_data = results[0] if results else None
+                            
+                            if call_data:
+                                # Check if analysis exists, try to refresh if missing
+                                if 'analysis' not in call_data or not call_data.get('analysis'):
+                                    print(f"   ⚠️  Customer {i+1} ({customer.get('company', 'Unknown')}): No analysis in call_data")
+                                    print(f"      Call data keys: {list(call_data.keys())}")
+                                    # Try to refresh call status to get analysis
+                                    if 'id' in call_data:
+                                        call_id = call_data['id']
+                                        print(f"      Attempting to refresh call status for call_id: {call_id}")
+                                        try:
+                                            refreshed_data = vapi_service.check_call_status(call_id)
+                                            if refreshed_data and refreshed_data.get('analysis'):
+                                                call_data = refreshed_data
+                                                print(f"      ✅ Successfully retrieved analysis from refreshed call status")
+                                            else:
+                                                print(f"      ⚠️  Refreshed call status also has no analysis")
+                                        except Exception as e:
+                                            print(f"      ❌ Failed to refresh call status: {e}")
+                                
+                                # Try to update Smartsheet
+                                try:
+                                    success = update_after_call(smartsheet_service, customer, call_data, stage)
+                                    if success:
+                                        total_success += 1
+                                    else:
+                                        print(f"   ❌ Failed to update Smartsheet for {customer.get('company', 'Unknown')}")
+                                        total_failed += 1
+                                except Exception as e:
+                                    print(f"   ❌ Exception updating Smartsheet for {customer.get('company', 'Unknown')}: {e}")
+                                    import traceback
+                                    traceback.print_exc()
+                                    total_failed += 1
+                            else:
+                                print(f"   ❌ No call data for customer {i+1} ({customer.get('company', 'Unknown')})")
                                 total_failed += 1
                     else:
                         print(f"   ⏰ Calls scheduled - Smartsheet will be updated after calls complete")
