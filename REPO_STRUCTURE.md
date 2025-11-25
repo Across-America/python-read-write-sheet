@@ -22,6 +22,7 @@
 - `direct_bill.py` - Direct Bill Workflow
 - `mortgage_bill.py` - Mortgage Bill Workflow
 - `cross_sells.py` - Cross-Sells Workflow
+- `stm1.py` - STM1 Project Workflow (Statement Call - All American Claims)
 
 ### `/tests/` - 正式测试
 - 单元测试和集成测试

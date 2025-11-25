@@ -16,6 +16,7 @@ from workflows.cross_sells import run_cross_sells_calling
 from workflows.non_renewals import run_non_renewals_calling
 from workflows.direct_bill import run_direct_bill_batch_calling
 from workflows.mortgage_bill import run_mortgage_bill_calling
+from workflows.stm1 import run_stm1_batch_calling
 
 
 # Setup logging
@@ -136,9 +137,17 @@ def main():
                 schedule_at=None,     # Call immediately
                 auto_confirm=True     # Skip confirmation (cron mode)
             )
+        elif workflow_type == 'stm1':
+            logger.info("🔄 Running STM1 Project Workflow - Statement Call")
+            # Run the STM1 batch calling workflow
+            success = run_stm1_batch_calling(
+                test_mode=False,      # Production mode
+                schedule_at=None,     # Call immediately
+                auto_confirm=True     # Skip confirmation (cron mode)
+            )
         else:
             logger.error(f"❌ Unknown workflow type: {workflow_type}")
-            logger.error("   Supported types: 'cancellations', 'renewals', 'cross_sells', 'non_renewals', 'direct_bill', 'mortgage_bill'")
+            logger.error("   Supported types: 'cancellations', 'renewals', 'cross_sells', 'non_renewals', 'direct_bill', 'mortgage_bill', 'stm1'")
             return 1
 
         if success:

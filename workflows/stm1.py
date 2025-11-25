@@ -1,27 +1,31 @@
 """
-N1 Project - Non-Renewals Workflow
-Notify Customers About Non-Renewal and Re-Quoting
-Contact insureds who have received non-renewals to let them know about the non-renewal
-and that we are working on re-quoting and if anything further is needed we will contact them
+STM1 Project Workflow
+Statement Call Workflow - All American Claims workspace
+Automated calling workflow for STM1 project
 
-Note: This workflow is part of the N1 Project, which includes two workflows based on the renewal sheet:
-- Renewal Workflow
-- Non-Renewal Workflow (this file)
+Note: This workflow implements a multi-stage calling system for STM1 project.
+Uses the "statements call" sheet in the "All American Claims" workspace.
 """
 
 from datetime import datetime, timedelta, date
 from zoneinfo import ZoneInfo
 from services import VAPIService, SmartsheetService
 from config import (
-    NON_RENEWALS_ASSISTANT_ID,
-    NON_RENEWAL_CALLING_SCHEDULE,
-    NON_RENEWAL_1ST_REMINDER_ASSISTANT_ID,
-    NON_RENEWAL_2ND_REMINDER_ASSISTANT_ID,
-    NON_RENEWAL_3RD_REMINDER_ASSISTANT_ID,
-    RENEWAL_PLR_SHEET_ID,
-    RENEWAL_WORKSPACE_NAME
+    STM1_1ST_REMINDER_ASSISTANT_ID,
+    STM1_2ND_REMINDER_ASSISTANT_ID,
+    STM1_3RD_REMINDER_ASSISTANT_ID,
+    STM1_SHEET_ID,
+    STM1_WORKSPACE_NAME,
+    STM1_SHEET_NAME,
+    STM1_CALLING_SCHEDULE,
+    STM1_CALLING_START_DAY
 )
-from workflows.renewals import parse_date
+from workflows.cancellations import (
+    is_weekend,
+    count_business_days,
+    add_business_days,
+    parse_date
+)
 import logging
 from typing import List, Dict, Optional, Tuple
 
@@ -30,9 +34,9 @@ from typing import List, Dict, Optional, Tuple
 # Data Validation and Filtering
 # ========================================
 
-def validate_non_renewal_customer_data(customer):
+def validate_stm1_customer_data(customer):
     """
-    Comprehensive data validation for non-renewal customer
+    Comprehensive data validation for STM1 customer
     
     Args:
         customer: Customer dict
@@ -44,13 +48,16 @@ def validate_non_renewal_customer_data(customer):
     validated = {}
     
     # Required fields validation
-    company = customer.get('company', '').strip()
+    # Use insured_name column from STM1 sheet (statements call)
+    company = customer.get('insured_name', '').strip() or customer.get('company', '').strip()
     if not company:
-        errors.append("Company name is empty")
+        errors.append("Insured name is empty")
     else:
         validated['company'] = company
+        validated['insured_name'] = company
     
-    phone_field = customer.get('client_phone_number', '') or customer.get('phone_number', '')
+    # Use contact_phone column from STM1 sheet
+    phone_field = customer.get('contact_phone', '') or customer.get('client_phone_number', '') or customer.get('phone_number', '')
     phone = phone_field.strip()
     if not phone:
         errors.append("Phone number is empty")
@@ -61,79 +68,21 @@ def validate_non_renewal_customer_data(customer):
         else:
             validated['phone_number'] = phone
     
-    expiry_field = customer.get('expiration_date', '') or customer.get('expiration date', '')
-    if not expiry_field:
-        errors.append("Expiration date is empty")
+    # Use due_date or current_due_date column from STM1 sheet
+    target_date_field = customer.get('due_date', '') or customer.get('current_due_date', '') or customer.get('target_date', '') or customer.get('expiration_date', '')
+    if not target_date_field:
+        errors.append("Due date is empty")
     else:
-        expiry_date = parse_date(expiry_field)
-        if not expiry_date:
-            errors.append(f"Invalid expiration date format: {expiry_field}")
+        target_date = parse_date(target_date_field)
+        if not target_date:
+            errors.append(f"Invalid date format: {target_date_field}")
         else:
-            # Check if date is in the past (expired)
-            if expiry_date < date.today():
-                errors.append(f"Policy already expired: {expiry_date}")
-            else:
-                validated['expiration_date'] = expiry_date
-                validated['expiration_date_str'] = expiry_field
+            validated['target_date'] = target_date
+            validated['target_date_str'] = target_date_field
+            validated['due_date'] = target_date
     
-    # Non-renewal status validation
-    renewal_field = customer.get('renewal / non-renewal', '') or customer.get('renewal___non-renewal', '')
-    renewal_status = str(renewal_field).strip().lower()
-    if not renewal_status:
-        errors.append("Renewal / Non-Renewal is empty")
-    elif 'renewal' in renewal_status and 'non-renewal' not in renewal_status and 'non renewal' not in renewal_status and 'nonrenewal' not in renewal_status.replace(' ', ''):
-        errors.append(f"Not a non-renewal customer: {renewal_field}")
-    else:
-        validated['renewal_status'] = renewal_status
-    
-    # Status validation - must be one of the allowed statuses
-    # Required statuses for non-renewal workflow:
-    # - u/w questions
-    # - missing information
-    # - no response client
-    # - pending uw cancel
-    # - pending photos
-    # - pending uw review
-    # - re-quote
-    status_field = customer.get('status', '') or customer.get('Status', '')
-    status = str(status_field).strip().lower()
-    
-    # Allowed statuses (case-insensitive matching with variants for flexibility)
-    allowed_statuses = [
-        'u/w questions',
-        'uw questions',  # Variant without slash
-        'missing information',
-        'no response client',
-        'no response',  # Variant for flexibility
-        'pending uw cancel',
-        'pending uwcancel',  # Variant without space
-        'pending photos',
-        'pending uw review',
-        'pending uwreview',  # Variant without space
-        're-quote',
-        'requote'  # Variant without hyphen
-    ]
-    
-    # Check if status matches any allowed status (case-insensitive, flexible matching)
-    status_normalized = status.replace(' ', '').replace('-', '').replace('_', '').replace('/', '')
-    matches_allowed = False
-    
-    for allowed in allowed_statuses:
-        allowed_normalized = allowed.replace(' ', '').replace('-', '').replace('_', '').replace('/', '')
-        if allowed_normalized in status_normalized or status_normalized in allowed_normalized:
-            matches_allowed = True
-            break
-    
-    if not matches_allowed:
-        errors.append(f"Status not in allowed list: {status_field}")
-    else:
-        validated['status'] = status
-    
-    # Payee validation - No filtering required (any payee is allowed for non-renewal workflow)
-    payee = str(customer.get('payee', '')).strip()
-    if payee:
-        validated['payee'] = payee
-    # Note: Non-renewal workflow accepts any payee value (no filtering)
+    # TODO: Add STM1-specific status/condition validation
+    # Example: status, payee, or other filtering conditions
     
     if errors:
         return False, "; ".join(errors), None
@@ -141,23 +90,18 @@ def validate_non_renewal_customer_data(customer):
     return True, "", validated
 
 
-def should_skip_non_renewal_row(customer):
+def should_skip_stm1_row(customer):
     """
-    Check if a row should be skipped for non-renewal calling
+    Check if a STM1 row should be skipped
     
-    Only process rows that meet ALL of:
-    - renewal / non-renewal = "non-renewal" (case-insensitive)
-    - status is one of: u/w questions, missing information, no response client,
-      pending uw cancel, pending photos, pending uw review, re-quote
-    - payee: Any value (no filtering required)
+    TODO: Customize filtering logic based on STM1 requirements
     
     Skip if ANY of:
     - done is checked/true
     - company is empty
-    - client_phone_number is empty
-    - expiration_date is empty or invalid
-    - renewal / non-renewal is empty or not "non-renewal"
-    - status is not in the allowed list
+    - phone_number is empty
+    - target_date is empty or invalid
+    - Other STM1-specific conditions
     
     Args:
         customer: Customer dict
@@ -170,126 +114,67 @@ def should_skip_non_renewal_row(customer):
         return True, "Done checkbox is checked"
 
     # Check required fields
-    if not customer.get('company', '').strip():
-        return True, "Company is empty"
+    # Use insured_name column from STM1 sheet
+    insured_name = customer.get('insured_name', '').strip() or customer.get('company', '').strip()
+    if not insured_name:
+        return True, "Insured name is empty"
 
-    # Use Client Phone Number (actual column name from sheet)
-    phone_field = customer.get('client_phone_number', '') or customer.get('phone_number', '')
+    # Use contact_phone column from STM1 sheet
+    phone_field = customer.get('contact_phone', '') or customer.get('client_phone_number', '') or customer.get('phone_number', '')
     if not phone_field.strip():
         return True, "Phone number is empty"
 
-    # Use Expiration Date (actual column name from sheet)
-    expiry_field = customer.get('expiration_date', '') or customer.get('expiration date', '')
-    if not expiry_field.strip():
-        return True, "Expiration date is empty"
-
-    # Check renewal / non-renewal status (actual column name from sheet)
-    renewal_field = customer.get('renewal / non-renewal', '') or customer.get('renewal___non-renewal', '')
-    renewal_status = str(renewal_field).strip().lower()
-    if not renewal_status:
-        return True, "Renewal / Non-Renewal is empty"
+    # Check due date - use due_date or current_due_date column from STM1 sheet
+    target_date_field = customer.get('due_date', '') or customer.get('current_due_date', '') or customer.get('target_date', '') or customer.get('expiration_date', '')
+    if not target_date_field:
+        return True, "Due date is empty"
     
-    # Must be "non-renewal" (not "renewal")
-    if 'non-renewal' not in renewal_status and 'non renewal' not in renewal_status and 'nonrenewal' not in renewal_status.replace(' ', ''):
-        return True, f"Renewal / Non-Renewal is not 'non-renewal' (Status: {renewal_field})"
-
-    # Check status - must be one of the allowed statuses
-    # Required statuses for non-renewal workflow:
-    # - u/w questions
-    # - missing information
-    # - no response client
-    # - pending uw cancel
-    # - pending photos
-    # - pending uw review
-    # - re-quote
-    status_field = customer.get('status', '') or customer.get('Status', '')
-    status = str(status_field).strip().lower()
+    # TODO: Add STM1-specific filtering conditions
+    # Example:
+    # status = str(customer.get('status', '')).strip().lower()
+    # if 'some_status' not in status:
+    #     return True, f"Status does not match requirement: {status}"
     
-    # Allowed statuses (case-insensitive matching with variants for flexibility)
-    allowed_statuses = [
-        'u/w questions',
-        'uw questions',  # Variant without slash
-        'missing information',
-        'no response client',
-        'no response',  # Variant for flexibility
-        'pending uw cancel',
-        'pending uwcancel',  # Variant without space
-        'pending photos',
-        'pending uw review',
-        'pending uwreview',  # Variant without space
-        're-quote',
-        'requote'  # Variant without hyphen
-    ]
-    
-    # Check if status matches any allowed status (case-insensitive, flexible matching)
-    status_normalized = status.replace(' ', '').replace('-', '').replace('_', '').replace('/', '')
-    matches_allowed = False
-    
-    for allowed in allowed_statuses:
-        allowed_normalized = allowed.replace(' ', '').replace('-', '').replace('_', '').replace('/', '')
-        if allowed_normalized in status_normalized or status_normalized in allowed_normalized:
-            matches_allowed = True
-            break
-    
-    if not matches_allowed:
-        return True, f"Status not in allowed list (Status: {status_field}, Allowed: {', '.join(allowed_statuses)})"
-
     return False, ""
 
 
-def get_non_renewal_stage(customer):
+def get_stm1_stage(customer):
     """
-    Get the current non-renewal call stage for a customer
+    Get the current STM1 call stage for a customer
     
     Returns:
-        int: Stage number (0 for empty/null, 1, 2+)
+        int: Stage number (0 for empty/null, 1, 2, 3+)
     """
     # Try multiple possible column names (normalized)
-    # Use "stage" column (same as renewal workflow) for consistency
-    stage = customer.get('stage', '') or customer.get('non_renewal_call_stage', '') or customer.get('ai_call_stage', '')
+    stage = customer.get('stage', '') or customer.get('stm1_call_stage', '')
     
     if not stage or stage == '' or stage is None:
         return 0
     
     try:
-        stage_int = int(stage)
-        if stage_int < 0:
-            return 0
-        return stage_int
+        return int(stage)
     except (ValueError, TypeError):
         return 0
 
 
-def get_non_renewal_assistant_id_for_stage(stage):
-    """
-    Get the assistant ID for a given non-renewal stage
-    
-    Non-Renewal specific Assistant IDs:
-    - Stage 0 (14 days before) & Stage 1 (7 days before): NON_RENEWAL_1ST_REMINDER_ASSISTANT_ID
-    - Stage 2 (1 day before): NON_RENEWAL_3RD_REMINDER_ASSISTANT_ID
-    
-    Args:
-        stage: Stage number (0, 1, or 2)
-            - Stage 0: 14 days before expiration (1st Reminder) - shared with Stage 1
-            - Stage 1: 7 days before expiration (2nd Reminder) - shared with Stage 0
-            - Stage 2: 1 day before expiration (3rd Reminder)
-    
-    Returns:
-        str: Assistant ID for the stage
-    """
+def get_stm1_assistant_id_for_stage(stage):
+    """Get the appropriate assistant ID for a given STM1 call stage"""
     assistant_map = {
-        0: NON_RENEWAL_1ST_REMINDER_ASSISTANT_ID,  # 1st Reminder (14 days before)
-        1: NON_RENEWAL_2ND_REMINDER_ASSISTANT_ID,  # 2nd Reminder (7 days before) - same as 1st
-        2: NON_RENEWAL_3RD_REMINDER_ASSISTANT_ID   # 3rd Reminder (1 day before)
+        0: STM1_1ST_REMINDER_ASSISTANT_ID,  # 1st Reminder
+        1: STM1_2ND_REMINDER_ASSISTANT_ID,  # 2nd Reminder
+        2: STM1_3RD_REMINDER_ASSISTANT_ID   # 3rd Reminder
     }
     
     return assistant_map.get(stage)
 
 
-def is_non_renewal_ready_for_calling(customer, today):
+# ========================================
+# STM1 Timeline Logic
+# ========================================
+
+def is_stm1_ready_for_calling(customer, today):
     """
-    Check if a non-renewal customer is ready for calling based on timeline logic
-    All date calculations are based on the expiration_date column
+    Check if a STM1 customer is ready for calling based on timeline logic
     
     Args:
         customer: Customer dict
@@ -298,61 +183,64 @@ def is_non_renewal_ready_for_calling(customer, today):
     Returns:
         tuple: (is_ready: bool, reason: str, stage: int)
     """
-    # Parse expiration date from sheet (this is the base date for all calculations)
-    expiry_date_str = customer.get('expiration_date', '') or customer.get('expiration date', '')
-    expiry_date = parse_date(expiry_date_str)
+    # Parse target date from sheet - use due_date or current_due_date column
+    target_date_str = customer.get('due_date', '') or customer.get('current_due_date', '') or customer.get('target_date', '') or customer.get('expiration_date', '')
+    target_date = parse_date(target_date_str)
     
-    if not expiry_date:
-        return False, "Invalid expiration date", -1
+    if not target_date:
+        return False, "Invalid target date", -1
     
-    # Calculate days until expiry (based on expiration_date column)
-    days_until_expiry = (expiry_date - today).days
+    # Calculate days until target date
+    days_until_target = (target_date - today).days
     
-    # Check if already expired (skip if expired)
-    if days_until_expiry < 0:
-        return False, f"Policy already expired ({abs(days_until_expiry)} days ago)", -1
+    # Check if we should stop calling (past target date)
+    if days_until_target < 0:
+        return False, f"Target date passed ({abs(days_until_target)} days ago)", -1
     
-    # Check if today matches any of the calling schedule days (14, 7, or 1 days before)
-    for stage, days_before in enumerate(NON_RENEWAL_CALLING_SCHEDULE):
-        if days_until_expiry == days_before:
-            return True, f"Ready for stage {stage} call ({days_before} days before expiry)", stage
+    # Check if it's the right day of month to start calling
+    if today.day < STM1_CALLING_START_DAY:
+        return False, f"Not yet calling day (start on day {STM1_CALLING_START_DAY})", -1
     
-    # If within calling window but not on scheduled day
-    if days_until_expiry <= max(NON_RENEWAL_CALLING_SCHEDULE):
-        return False, f"Within calling window but not on scheduled day (expires in {days_until_expiry} days)", -1
+    # Check if today matches any of the calling schedule days
+    for stage, days_before in enumerate(STM1_CALLING_SCHEDULE):
+        if days_until_target == days_before:
+            return True, f"Ready for stage {stage} call ({days_before} days before target)", stage
     
-    # Too early
-    return False, f"Too early to call (expires in {days_until_expiry} days)", -1
+    # Check if we're within the calling window but not on a scheduled day
+    if days_until_target <= max(STM1_CALLING_SCHEDULE):
+        return False, f"Within calling window but not on scheduled day (target in {days_until_target} days)", -1
+    
+    return False, f"Too early to call (target in {days_until_target} days)", -1
 
 
-def calculate_non_renewal_next_followup_date(customer, current_stage):
+def calculate_stm1_next_followup_date(customer, current_stage):
     """
-    Calculate the next follow-up date for non-renewal calls
-    Based on the fixed schedule: 14, 7, 1 days before expiration_date
+    Calculate the next follow-up date for STM1 calls
+    Based on the fixed schedule defined in STM1_CALLING_SCHEDULE
     
     Args:
         customer: Customer dict
-        current_stage: Current call stage (0, 1, or 2)
+        current_stage: Current call stage (0, 1, 2, etc.)
     
     Returns:
-        date or None: Next follow-up date (None for stage 2/final)
+        date or None: Next follow-up date
     """
-    # Use Expiration Date column (this is the base date for all calculations)
-    expiry_date_str = customer.get('expiration_date', '') or customer.get('expiration date', '')
-    expiry_date = parse_date(expiry_date_str)
+    target_date_str = customer.get('due_date', '') or customer.get('current_due_date', '') or customer.get('target_date', '') or customer.get('expiration_date', '')
+    target_date = parse_date(target_date_str)
     
-    if not expiry_date:
-        print(f"   ⚠️  Invalid expiry date: {expiry_date_str}")
+    if not target_date:
+        print(f"   ⚠️  Invalid target date: {target_date_str}")
         return None
     
-    # Fixed schedule: 14, 7, 1 days before expiration_date
-    if current_stage < len(NON_RENEWAL_CALLING_SCHEDULE) - 1:
+    # Fixed schedule based on STM1_CALLING_SCHEDULE
+    if current_stage < len(STM1_CALLING_SCHEDULE) - 1:
         next_stage = current_stage + 1
-        days_before_expiry = NON_RENEWAL_CALLING_SCHEDULE[next_stage]
-        next_date = expiry_date - timedelta(days=days_before_expiry)
+        days_before_target = STM1_CALLING_SCHEDULE[next_stage]
+        next_date = target_date - timedelta(days=days_before_target)
         
-        stage_names = ["14 days before", "7 days before", "1 day before"]
-        print(f"   📅 Stage {current_stage}→{next_stage}: Next call {stage_names[next_stage]} ({next_date})")
+        stage_names = ["1st", "2nd", "3rd"]
+        stage_name = stage_names[next_stage] if next_stage < len(stage_names) else f"{next_stage + 1}th"
+        print(f"   📅 Stage {current_stage}→{next_stage}: Next call ({stage_name} reminder) on {next_date}")
         
         return next_date
     else:
@@ -361,61 +249,98 @@ def calculate_non_renewal_next_followup_date(customer, current_stage):
         return None
 
 
-def get_non_renewal_customers_ready_for_calls(smartsheet_service):
+# ========================================
+# Main Workflow Functions
+# ========================================
+
+def get_stm1_sheet():
     """
-    Get all non-renewal customers ready for calls today, grouped by stage
-    Based on expiration_date column: 14 days, 7 days, 1 day before expiry
+    Get the STM1 sheet from All American Claims workspace
+    
+    Returns:
+        SmartsheetService instance
+    """
+    try:
+        if STM1_SHEET_ID and STM1_SHEET_ID != 0:
+            print(f"🔍 Using STM1 sheet ID: {STM1_SHEET_ID}")
+            smartsheet_service = SmartsheetService(sheet_id=STM1_SHEET_ID)
+            return smartsheet_service
+        else:
+            # Fallback: Try by name in workspace
+            print(f"🔍 Looking for STM1 sheet: '{STM1_SHEET_NAME}' in workspace '{STM1_WORKSPACE_NAME}'")
+            smartsheet_service = SmartsheetService(
+                sheet_name=STM1_SHEET_NAME,
+                workspace_name=STM1_WORKSPACE_NAME
+            )
+            return smartsheet_service
+    except Exception as e:
+        print(f"❌ Failed to get STM1 sheet: {e}")
+        print(f"   Workspace: {STM1_WORKSPACE_NAME}")
+        print(f"   Sheet Name: {STM1_SHEET_NAME}")
+        raise
+
+
+def get_stm1_customers_ready_for_calls(smartsheet_service):
+    """
+    Get all STM1 customers ready for calls today based on timeline logic
     
     Returns:
         dict: Customers grouped by stage {0: [...], 1: [...], 2: [...]}
     """
     print("=" * 80)
-    print("🔍 FETCHING NON-RENEWAL CUSTOMERS READY FOR CALLS")
+    print("🔍 FETCHING STM1 CUSTOMERS READY FOR CALLS")
     print("=" * 80)
+
+    # Check if configuration is set
+    if STM1_CALLING_SCHEDULE is None:
+        raise ValueError("STM1_CALLING_SCHEDULE is not configured. Please configure it in config/settings.py")
+    if STM1_CALLING_START_DAY is None:
+        raise ValueError("STM1_CALLING_START_DAY is not configured. Please configure it in config/settings.py")
 
     # Get all customers from sheet
     all_customers = smartsheet_service.get_all_customers_with_stages()
 
-    # Use Pacific Time for "today"
+    # Use Pacific Time for "today" to ensure consistent behavior
     pacific_tz = ZoneInfo("America/Los_Angeles")
     today = datetime.now(pacific_tz).date()
     print(f"📅 Today (Pacific Time): {today}")
-    print(f"⏰ Calling schedule: {NON_RENEWAL_CALLING_SCHEDULE} days before expiry")
+    print(f"⏰ Calling schedule: {STM1_CALLING_SCHEDULE} days before target")
+    print(f"📅 Start calling on day: {STM1_CALLING_START_DAY} of each month")
 
-    customers_by_stage = {0: [], 1: [], 2: []}  # 3 stages: 14, 7, 1 days before
+    num_stages = len(STM1_CALLING_SCHEDULE)
+    customers_by_stage = {i: [] for i in range(num_stages)}
     skipped_count = 0
     
     for customer in all_customers:
         # Initial validation
-        should_skip, skip_reason = should_skip_non_renewal_row(customer)
+        should_skip, skip_reason = should_skip_stm1_row(customer)
         if should_skip:
             skipped_count += 1
             print(f"   ⏭️  Skipping row {customer.get('row_number')}: {skip_reason}")
             continue
         
         # Get current stage
-        current_stage = get_non_renewal_stage(customer)
+        current_stage = get_stm1_stage(customer)
         
-        # Skip if stage >= 3 (call sequence complete - all 3 calls made)
-        if current_stage >= 3:
+        # Skip if stage >= num_stages (call sequence complete)
+        if current_stage >= num_stages:
             skipped_count += 1
-            print(f"   ⏭️  Skipping row {customer.get('row_number')}: Non-renewal sequence complete (stage {current_stage})")
+            print(f"   ⏭️  Skipping row {customer.get('row_number')}: STM1 sequence complete (stage {current_stage})")
             continue
         
         # Check if ready for calling based on timeline
-        is_ready, ready_reason, target_stage = is_non_renewal_ready_for_calling(customer, today)
+        is_ready, ready_reason, target_stage = is_stm1_ready_for_calling(customer, today)
         if not is_ready:
             skipped_count += 1
             print(f"   ⏭️  Skipping row {customer.get('row_number')}: {ready_reason}")
             continue
         
         # Check if the customer is at the right stage for today's call
-        # Allow auto-adjustment if customer missed earlier stages (for new workflows)
+        # Allow auto-adjustment if customer missed earlier stages
         if current_stage != target_stage:
             if current_stage < target_stage:
                 # Customer missed earlier stages - allow auto-adjustment
                 print(f"   ⚠️  Row {customer.get('row_number')}: Auto-adjusting stage {current_stage} → {target_stage} (missed earlier stages)")
-                # Continue to add customer - stage will be updated after call
             else:
                 # Customer already passed this stage - skip
                 skipped_count += 1
@@ -423,71 +348,58 @@ def get_non_renewal_customers_ready_for_calls(smartsheet_service):
                 continue
         
         customers_by_stage[target_stage].append(customer)
-        stage_names = ["14 days before", "7 days before", "1 day before"]
-        print(f"   ✅ Row {customer.get('row_number')}: Stage {target_stage} ({stage_names[target_stage]}), ready for non-renewal call")
+        stage_names = ["1st", "2nd", "3rd"]
+        stage_name = stage_names[target_stage] if target_stage < len(stage_names) else f"{target_stage + 1}th"
+        print(f"   ✅ Row {customer.get('row_number')}: Stage {target_stage} ({stage_name} reminder), ready for STM1 call")
     
     print(f"\n📊 Summary:")
-    print(f"   Stage 0 (14 days before): {len(customers_by_stage[0])} customers")
-    print(f"   Stage 1 (7 days before): {len(customers_by_stage[1])} customers")
-    print(f"   Stage 2 (1 day before): {len(customers_by_stage[2])} customers")
+    for stage in range(num_stages):
+        stage_names = ["1st", "2nd", "3rd"]
+        stage_name = stage_names[stage] if stage < len(stage_names) else f"{stage + 1}th"
+        print(f"   Stage {stage} ({stage_name} reminder): {len(customers_by_stage[stage])} customers")
     print(f"   Skipped: {skipped_count} rows")
     print(f"   Total ready: {sum(len(v) for v in customers_by_stage.values())}")
     
     return customers_by_stage
 
 
-def format_non_renewal_call_entry(summary, evaluation, call_number):
-    """Format a non-renewal call entry for appending"""
+def format_stm1_call_entry(summary, evaluation, call_number):
+    """Format a STM1 call entry for appending"""
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    entry = f"[Non-Renewal Call {call_number} - {timestamp}]\n{summary}\n"
-    eval_entry = f"[Non-Renewal Call {call_number} - {timestamp}]\n{evaluation}\n"
+    entry = f"[STM1 Call {call_number} - {timestamp}]\n{summary}\n"
+    eval_entry = f"[STM1 Call {call_number} - {timestamp}]\n{evaluation}\n"
     return entry, eval_entry
 
 
-def update_after_non_renewal_call(smartsheet_service, customer, call_data, call_stage):
+def update_after_stm1_call(smartsheet_service, customer, call_data, call_stage):
     """
-    Update Smartsheet after a successful non-renewal call
+    Update Smartsheet after a successful STM1 call
     
     Args:
         smartsheet_service: SmartsheetService instance
         customer: Customer dict
         call_data: Call result data from VAPI
-        call_stage: Stage at which the call was made (0, 1, or 2)
-                    This may be different from customer's current_stage if auto-adjustment occurred
+        call_stage: Stage at which the call was made
     """
     # Extract call analysis
     analysis = call_data.get('analysis', {})
     
-    # Debug: Print analysis structure
     if not analysis:
         print(f"⚠️  WARNING: No analysis found in call_data")
         print(f"   Call data keys: {list(call_data.keys())}")
-        # Try to get analysis from different possible locations
         if 'result' in call_data and isinstance(call_data['result'], dict):
             analysis = call_data['result'].get('analysis', {})
-            print(f"   Found analysis in call_data['result']")
         if not analysis and 'call_data' in call_data:
             analysis = call_data['call_data'].get('analysis', {})
-            print(f"   Found analysis in call_data['call_data']")
-    
-    # Check if this is a voicemail call
-    ended_reason = call_data.get('endedReason', '')
-    is_voicemail = (ended_reason == 'voicemail')
     
     summary = analysis.get('summary', '') if analysis else ''
     if not summary or summary == '':
-        # Try alternative locations for summary
         if analysis:
             summary = analysis.get('transcript', '') or analysis.get('summaryText', '') or 'No summary available'
         else:
-            # If no analysis and it's voicemail, use "Left voicemail" instead of "No summary available"
-            if is_voicemail:
-                summary = 'Left voicemail'
-            else:
-                summary = 'No summary available'
+            summary = 'No summary available'
         if summary == 'No summary available':
             print(f"⚠️  WARNING: No summary found in analysis")
-            print(f"   Analysis keys: {list(analysis.keys()) if analysis else 'N/A'}")
 
     # Get evaluation with fallback to structured data
     evaluation = analysis.get('successEvaluation')
@@ -503,71 +415,39 @@ def update_after_non_renewal_call(smartsheet_service, customer, call_data, call_
     # Determine new stage (advance to next stage after this call)
     new_stage = call_stage + 1
 
-    # Calculate next followup date (None for stage 2)
-    next_followup_date = calculate_non_renewal_next_followup_date(customer, call_stage)
+    # Calculate next followup date
+    next_followup_date = calculate_stm1_next_followup_date(customer, call_stage)
 
     # Format entries for appending
     call_number = call_stage + 1
-    summary_entry, eval_entry = format_non_renewal_call_entry(summary, evaluation, call_number)
+    summary_entry, eval_entry = format_stm1_call_entry(summary, evaluation, call_number)
 
-    # Get existing values
-    existing_summary = customer.get('non_renewal_call_summary', '') or customer.get('ai_call_summary', '')
-    existing_eval = customer.get('non_renewal_call_eval', '') or customer.get('ai_call_eval', '')
-    
-    # Format call summary for Call Notes column (similar to CL1 Project and Renewal workflow)
-    # Use summary from VAPI analysis instead of full transcript
-    # For voicemail calls, ensure "Left voicemail" is shown
+    # Format call summary for Call Notes column
     timestamp = datetime.now(ZoneInfo("America/Los_Angeles")).strftime('%Y-%m-%d %H:%M:%S')
-    if is_voicemail and (not summary or summary == 'No summary available'):
-        call_notes_summary = 'Left voicemail'
-    else:
-        call_notes_summary = summary
-    call_notes_entry = f"[Non-Renewal Call #{call_number} - {timestamp}]\n{call_notes_summary}\n"
+    call_notes_entry = f"[STM1 Call #{call_number} - {timestamp}]\n{summary}\n"
     
     # Get existing call notes
-    existing_notes = customer.get('call_notes', '') or customer.get('non_renewal_call_notes', '')
+    existing_notes = customer.get('call_notes', '') or customer.get('stm1_call_notes', '')
     
-    # Append summary to existing notes (similar to CL1 Project format)
+    # Append summary to existing notes
     if existing_notes:
         new_call_notes = existing_notes + "\n---\n" + call_notes_entry
     else:
         new_call_notes = call_notes_entry
 
-    # Append or create
-    if existing_summary:
-        new_summary = existing_summary + "\n---\n" + summary_entry
-    else:
-        new_summary = summary_entry
-
-    if existing_eval:
-        new_eval = existing_eval + "\n---\n" + eval_entry
-    else:
-        new_eval = eval_entry
-
-    # Update fields
-    # Use actual column names from Smartsheet (same as renewal workflow):
-    # - "Stage" (normalized: "stage")
-    # - "F/U Date" (normalized: "f_u_date")
-    # - "Call Notes" (normalized: "call_notes")
-    # - "Last Call Made Date" (normalized: "last_call_made_date")
-    
     # Get current date in Pacific Time for Last Call Made Date
-    # Note: Smartsheet DATE type columns only accept date format (YYYY-MM-DD), not datetime
     pacific_tz = ZoneInfo("America/Los_Angeles")
     current_date = datetime.now(pacific_tz).date()
     last_call_date_str = current_date.strftime('%Y-%m-%d')
     
     updates = {
         'stage': new_stage,  # Use "Stage" column
-        'call_notes': new_call_notes,  # Store summary in Call Notes (similar to CL1 Project and Renewal workflow)
-        'last_call_made_date': last_call_date_str,  # Record last call date (date only for DATE type column)
+        'call_notes': new_call_notes,  # Store summary in Call Notes
+        'last_call_made_date': last_call_date_str,  # Record last call date
     }
 
     if next_followup_date:
         updates['f_u_date'] = next_followup_date.strftime('%Y-%m-%d')  # Use "F/U Date" column
-    
-    # Note: non_renewal_call_summary and non_renewal_call_eval columns may not exist in the sheet
-    # They will be skipped automatically by update_customer_fields if not found
 
     # Perform update
     success = smartsheet_service.update_customer_fields(customer, updates)
@@ -589,8 +469,8 @@ def update_after_non_renewal_call(smartsheet_service, customer, call_data, call_
 # Error Logging and Reporting
 # ========================================
 
-class NonRenewalWorkflowErrorLogger:
-    """Error logger for Non-Renewal workflow"""
+class STM1WorkflowErrorLogger:
+    """Error logger for STM1 workflow"""
     
     def __init__(self):
         self.errors: List[Dict] = []
@@ -678,9 +558,9 @@ class NonRenewalWorkflowErrorLogger:
         print(f"{'=' * 80}")
 
 
-def run_non_renewals_calling(test_mode=False, schedule_at=None, auto_confirm=False):
+def run_stm1_batch_calling(test_mode=False, schedule_at=None, auto_confirm=False):
     """
-    Main function to run non-renewals calling workflow with comprehensive error handling
+    Main function to run STM1 batch calling with comprehensive error handling
     
     Args:
         test_mode: If True, skip actual calls and Smartsheet updates (default: False)
@@ -688,95 +568,110 @@ def run_non_renewals_calling(test_mode=False, schedule_at=None, auto_confirm=Fal
         auto_confirm: If True, skip user confirmation prompt (for cron jobs) (default: False)
     """
     # Initialize error logger
-    error_logger = NonRenewalWorkflowErrorLogger()
+    error_logger = STM1WorkflowErrorLogger()
     
     print("=" * 80)
-    print("🚀 N1 PROJECT - NON-RENEWALS CALLING SYSTEM")
+    print("🚀 STM1 PROJECT - STATEMENT CALL BATCH CALLING SYSTEM")
+    print("📋 Workspace: All American Claims")
+    print("📄 Sheet: statements call")
     if test_mode:
         print("🧪 TEST MODE - No actual calls or updates will be made")
     if schedule_at:
         print(f"⏰ SCHEDULED MODE - Calls will be scheduled for {schedule_at.strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 80)
-    print("📋 N1 Project: Non-renewal notifications with dynamic sheet discovery")
-    print("📞 3-stage calling: 14 days → 7 days → 1 day before expiry")
+    print("📋 STM1 Project: Statement Call automated calling workflow")
+    
+    # Check if configuration is set
+    if STM1_CALLING_SCHEDULE is None:
+        error_logger.log_error({}, 0, 'CONFIGURATION_ERROR', "STM1_CALLING_SCHEDULE is not configured. Please configure it in config/settings.py")
+        return False
+    if STM1_CALLING_START_DAY is None:
+        error_logger.log_error({}, 0, 'CONFIGURATION_ERROR', "STM1_CALLING_START_DAY is not configured. Please configure it in config/settings.py")
+        return False
+    
+    print(f"📞 {len(STM1_CALLING_SCHEDULE)}-stage calling: {', '.join([f'{d} days before' for d in STM1_CALLING_SCHEDULE])}")
     print("=" * 80)
     
     try:
         # Initialize services
-        smartsheet_service = SmartsheetService(sheet_id=RENEWAL_PLR_SHEET_ID)
+        smartsheet_service = get_stm1_sheet()
         vapi_service = VAPIService()
     except Exception as e:
         error_logger.log_error({}, 0, 'INITIALIZATION_ERROR', f"Failed to initialize services: {e}", e)
         return False
     
     # Get customers grouped by stage
-    customers_by_stage = get_non_renewal_customers_ready_for_calls(smartsheet_service)
+    customers_by_stage = get_stm1_customers_ready_for_calls(smartsheet_service)
     
     total_customers = sum(len(v) for v in customers_by_stage.values())
     
     if total_customers == 0:
-        print("\n✅ No non-renewal customers ready for calls today")
+        print("\n✅ No STM1 customers ready for calls today")
         return True
     
     # Show summary and ask for confirmation
     print(f"\n{'=' * 80}")
-    print(f"📊 NON-RENEWAL CUSTOMERS READY FOR CALLS TODAY:")
+    print(f"📊 STM1 CUSTOMERS READY FOR CALLS TODAY:")
     print(f"{'=' * 80}")
     
-    for stage, customers in customers_by_stage.items():
+    num_stages = len(STM1_CALLING_SCHEDULE)
+    for stage in range(num_stages):
+        customers = customers_by_stage[stage]
         if customers:
-            stage_names = {0: "1st Reminder (14 days before)", 1: "2nd Reminder (7 days before)", 2: "3rd Reminder (1 day before)"}
-            assistant_id = get_non_renewal_assistant_id_for_stage(stage)
-            print(f"\n🔔 Stage {stage} ({stage_names[stage]}) - {len(customers)} customers:")
+            stage_names = ["1st", "2nd", "3rd"]
+            stage_name = stage_names[stage] if stage < len(stage_names) else f"{stage + 1}th"
+            assistant_id = get_stm1_assistant_id_for_stage(stage)
+            print(f"\n🔔 Stage {stage} ({stage_name} Reminder) - {len(customers)} customers:")
             print(f"   🤖 Assistant ID: {assistant_id}")
             
             for i, customer in enumerate(customers[:5], 1):
-                print(f"   {i}. {customer.get('company', 'Unknown')} - {customer.get('client_phone_number', 'N/A')}")
+                print(f"   {i}. {customer.get('company', 'Unknown')} - {customer.get('phone_number')}")
             
             if len(customers) > 5:
                 print(f"   ... and {len(customers) - 5} more")
     
     print(f"\n{'=' * 80}")
     if not test_mode:
-        print(f"⚠️  WARNING: This will make {total_customers} non-renewal phone calls!")
+        print(f"⚠️  WARNING: This will make {total_customers} STM1 phone calls!")
         print(f"💰 This will incur charges for each call")
     else:
-        print(f"🧪 TEST MODE: Will simulate {total_customers} non-renewal calls (no charges)")
+        print(f"🧪 TEST MODE: Will simulate {total_customers} STM1 calls (no charges)")
     print(f"{'=' * 80}")
 
     # Only ask for confirmation if not auto_confirm and not test_mode
     if not test_mode and not auto_confirm:
-        response = input(f"\nProceed with non-renewals calling? (y/N): ").strip().lower()
+        response = input(f"\nProceed with STM1 batch calling? (y/N): ").strip().lower()
+
         if response not in ['y', 'yes']:
-            print("❌ Non-renewals calling cancelled")
+            print("❌ STM1 batch calling cancelled")
             return False
     elif auto_confirm:
         print(f"🤖 AUTO-CONFIRM: Proceeding automatically (cron mode)")
     
-    # Process each stage (3 stages: 14, 7, 1 days before)
+    # Process each stage
     total_success = 0
     total_failed = 0
 
-    for stage in [0, 1, 2]:
+    for stage in range(num_stages):
         customers = customers_by_stage[stage]
 
         if not customers:
             continue
 
-        stage_names = {0: "14 days before", 1: "7 days before", 2: "1 day before"}
-        stage_name = stage_names[stage]
-        assistant_id = get_non_renewal_assistant_id_for_stage(stage)
+        stage_names = ["1st", "2nd", "3rd"]
+        stage_name = stage_names[stage] if stage < len(stage_names) else f"{stage + 1}th"
+        assistant_id = get_stm1_assistant_id_for_stage(stage)
 
         print(f"\n{'=' * 80}")
-        print(f"📞 NON-RENEWAL CALLING STAGE {stage} ({stage_name}) - {len(customers)} customers")
+        print(f"📞 STM1 CALLING STAGE {stage} ({stage_name} Reminder) - {len(customers)} customers")
         print(f"🤖 Using Assistant: {assistant_id}")
         print(f"{'=' * 80}")
 
         if test_mode:
             # Test mode: Simulate calls without actual API calls
-            print(f"\n🧪 TEST MODE: Simulating {len(customers)} non-renewal calls...")
+            print(f"\n🧪 TEST MODE: Simulating {len(customers)} STM1 calls...")
             for customer in customers:
-                print(f"   ✅ [SIMULATED] Would call: {customer.get('company', 'Unknown')}")
+                print(f"   ✅ [SIMULATED] Would call: {customer.get('company', 'Unknown')} - {customer.get('phone_number')}")
                 total_success += 1
         else:
             # Stage 0: Batch calling (all customers simultaneously)
@@ -785,9 +680,8 @@ def run_non_renewals_calling(test_mode=False, schedule_at=None, auto_confirm=Fal
                 # Validate customers before calling
                 validated_customers = []
                 for customer in customers:
-                    is_valid, error_msg, validated_data = validate_non_renewal_customer_data(customer)
+                    is_valid, error_msg, validated_data = validate_stm1_customer_data(customer)
                     if is_valid:
-                        # Merge validated data into customer (especially phone_number)
                         customer_for_call = {**customer, **validated_data}
                         validated_customers.append(customer_for_call)
                     else:
@@ -808,41 +702,32 @@ def run_non_renewals_calling(test_mode=False, schedule_at=None, auto_confirm=Fal
                     )
 
                     if results:
-                        print(f"\n✅ Stage {stage} non-renewal batch calls completed")
+                        print(f"\n✅ Stage {stage} STM1 batch calls completed")
                         print(f"   📊 Received {len(results)} call result(s) for {len(validated_customers)} customer(s)")
 
                         # Only update Smartsheet if calls were immediate (not scheduled)
                         if schedule_at is None:
-                            # Handle case where results might be a list of lists or single items
                             for i, customer in enumerate(validated_customers):
-                                # Get corresponding call_data (handle different result structures)
                                 if i < len(results):
                                     call_data = results[i]
                                 else:
-                                    # If results length doesn't match, try to get from first result
                                     call_data = results[0] if results else None
                                 
                                 if call_data:
-                                    # Debug: Check if analysis exists
                                     if 'analysis' not in call_data or not call_data.get('analysis'):
                                         print(f"   ⚠️  Customer {i+1} ({customer.get('company', 'Unknown')}): No analysis in call_data")
-                                        print(f"      Call data keys: {list(call_data.keys())}")
-                                        # Try to refresh call status to get analysis
                                         if 'id' in call_data:
                                             call_id = call_data['id']
-                                            print(f"      Attempting to refresh call status for call_id: {call_id}")
                                             try:
                                                 refreshed_data = vapi_service.check_call_status(call_id)
                                                 if refreshed_data and refreshed_data.get('analysis'):
                                                     call_data = refreshed_data
                                                     print(f"      ✅ Successfully retrieved analysis from refreshed call status")
-                                                else:
-                                                    print(f"      ⚠️  Refreshed call status also has no analysis")
                                             except Exception as e:
                                                 print(f"      ❌ Failed to refresh call status: {e}")
                                     
                                     try:
-                                        success = update_after_non_renewal_call(smartsheet_service, customer, call_data, stage)
+                                        success = update_after_stm1_call(smartsheet_service, customer, call_data, stage)
                                         if success:
                                             total_success += 1
                                         else:
@@ -858,17 +743,17 @@ def run_non_renewals_calling(test_mode=False, schedule_at=None, auto_confirm=Fal
                             print(f"   ⏰ Calls scheduled - Smartsheet will be updated after calls complete")
                             total_success += len(validated_customers)
                     else:
-                        print(f"\n❌ Stage {stage} non-renewal batch calls failed")
+                        print(f"\n❌ Stage {stage} STM1 batch calls failed")
                         for customer in validated_customers:
                             error_logger.log_error(customer, stage, 'VAPI_CALL_FAILED', "VAPI API returned no results")
                         total_failed += len(validated_customers)
                 except Exception as e:
-                    print(f"\n❌ Stage {stage} non-renewal batch calls failed with exception")
+                    print(f"\n❌ Stage {stage} STM1 batch calls failed with exception")
                     for customer in validated_customers:
                         error_logger.log_error(customer, stage, 'VAPI_CALL_EXCEPTION', f"Exception during VAPI call: {e}", e)
                     total_failed += len(validated_customers)
 
-            # Stage 1 & 2: Sequential calling (one customer at a time)
+            # Stage 1+: Sequential calling (one customer at a time)
             else:
                 print(f"🔄 Sequential calling mode (one at a time)")
 
@@ -876,19 +761,18 @@ def run_non_renewals_calling(test_mode=False, schedule_at=None, auto_confirm=Fal
                     print(f"\n   📞 Call {i}/{len(customers)}: {customer.get('company', 'Unknown')}")
 
                     # Validate customer before calling
-                    is_valid, error_msg, validated_data = validate_non_renewal_customer_data(customer)
+                    is_valid, error_msg, validated_data = validate_stm1_customer_data(customer)
                     if not is_valid:
                         error_logger.log_validation_failure(customer, error_msg)
                         error_logger.log_warning(customer, stage, 'VALIDATION_FAILED', error_msg)
                         total_failed += 1
                         continue
 
-                    # Merge validated data into customer (especially phone_number)
                     customer_for_call = {**customer, **validated_data}
 
                     try:
                         results = vapi_service.make_batch_call_with_assistant(
-                            [customer_for_call],  # Only one customer at a time
+                            [customer_for_call],
                             assistant_id,
                             schedule_immediately=(schedule_at is None),
                             schedule_at=schedule_at
@@ -907,15 +791,13 @@ def run_non_renewals_calling(test_mode=False, schedule_at=None, auto_confirm=Fal
                                         if refreshed_data and refreshed_data.get('analysis'):
                                             call_data = refreshed_data
                                             print(f"   ✅ Successfully retrieved analysis from refreshed call status")
-                                        else:
-                                            print(f"   ⚠️  Refreshed call status also has no analysis")
                                     except Exception as e:
                                         print(f"   ❌ Failed to refresh call status: {e}")
 
                             # Only update Smartsheet if calls were immediate (not scheduled)
                             if schedule_at is None:
                                 try:
-                                    success = update_after_non_renewal_call(smartsheet_service, customer, call_data, stage)
+                                    success = update_after_stm1_call(smartsheet_service, customer, call_data, stage)
                                     if success:
                                         total_success += 1
                                     else:
@@ -936,11 +818,11 @@ def run_non_renewals_calling(test_mode=False, schedule_at=None, auto_confirm=Fal
                         error_logger.log_error(customer, stage, 'VAPI_CALL_EXCEPTION', f"Exception during VAPI call: {e}", e)
                         total_failed += 1
 
-                print(f"\n✅ Stage {stage} non-renewal sequential calls completed")
+                print(f"\n✅ Stage {stage} STM1 sequential calls completed")
     
     # Final summary
     print(f"\n{'=' * 80}")
-    print(f"🏁 NON-RENEWALS CALLING COMPLETE")
+    print(f"🏁 STM1 BATCH CALLING COMPLETE")
     print(f"{'=' * 80}")
     print(f"   ✅ Successful: {total_success}")
     print(f"   ❌ Failed: {total_failed}")
@@ -954,8 +836,15 @@ def run_non_renewals_calling(test_mode=False, schedule_at=None, auto_confirm=Fal
     return True
 
 
+# ========================================
+# Entry Point
+# ========================================
+
 if __name__ == "__main__":
     import sys
+
+    # Check if test mode is requested
     test_mode = "--test" in sys.argv or "-t" in sys.argv
-    run_non_renewals_calling(test_mode=test_mode)
+
+    run_stm1_batch_calling(test_mode=test_mode)
 

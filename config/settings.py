@@ -103,6 +103,26 @@ DIRECT_BILL_CALLING_SCHEDULE = [14, 7, 1]  # Days before payment due date to cal
 NON_RENEWAL_CALLING_SCHEDULE = [14, 7, 1]  # Days before expiration date to call
 
 # ========================================
+# STM1 Project Configuration
+# Statement Call Workflow - All American Claims workspace
+# ========================================
+# STM1 Assistant IDs - TO BE CONFIGURED
+STM1_1ST_REMINDER_ASSISTANT_ID = None  # TODO: Configure when assistant IDs are decided
+STM1_2ND_REMINDER_ASSISTANT_ID = None  # TODO: Configure when assistant IDs are decided
+STM1_3RD_REMINDER_ASSISTANT_ID = None  # TODO: Configure when assistant IDs are decided
+
+# STM1 Sheet Configuration
+# Location: All American Claims workspace -> statements call sheet
+STM1_SHEET_ID = 3766712882122628  # "statements call" sheet ID
+STM1_WORKSPACE_NAME = "All American Claims"
+STM1_SHEET_NAME = "statements call"
+
+# STM1 Timeline Configuration - TO BE CONFIGURED
+# Contact schedule: To be determined based on STM1 requirements
+STM1_CALLING_SCHEDULE = None  # TODO: Configure when workflow schedule is decided (e.g., [14, 7, 1])
+STM1_CALLING_START_DAY = None  # TODO: Configure when start day is decided (e.g., 1)
+
+# ========================================
 # Call Monitoring Configuration
 # ========================================
 DEFAULT_CHECK_INTERVAL = 15  # seconds

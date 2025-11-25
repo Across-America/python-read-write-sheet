@@ -535,13 +535,21 @@ def update_after_renewal_call(smartsheet_service, customer, call_data, call_stag
             analysis = call_data['call_data'].get('analysis', {})
             print(f"   Found analysis in call_data['call_data']")
     
+    # Check if this is a voicemail call
+    ended_reason = call_data.get('endedReason', '')
+    is_voicemail = (ended_reason == 'voicemail')
+    
     summary = analysis.get('summary', '') if analysis else ''
     if not summary or summary == '':
         # Try alternative locations for summary
         if analysis:
             summary = analysis.get('transcript', '') or analysis.get('summaryText', '') or 'No summary available'
         else:
-            summary = 'No summary available'
+            # If no analysis and it's voicemail, use "Left voicemail" instead of "No summary available"
+            if is_voicemail:
+                summary = 'Left voicemail'
+            else:
+                summary = 'No summary available'
         if summary == 'No summary available':
             print(f"⚠️  WARNING: No summary found in analysis")
             print(f"   Analysis keys: {list(analysis.keys()) if analysis else 'N/A'}")
@@ -571,15 +579,84 @@ def update_after_renewal_call(smartsheet_service, customer, call_data, call_stag
     existing_summary = customer.get('renewal_call_summary', '')
     existing_eval = customer.get('renewal_call_eval', '')
     
-    # Format call summary for Call Notes column (similar to CL1 Project)
-    # Use summary from VAPI analysis instead of full transcript
-    timestamp = datetime.now(ZoneInfo("America/Los_Angeles")).strftime('%Y-%m-%d %H:%M:%S')
-    call_notes_entry = f"[Renewal Call #{call_number} - {timestamp}]\n{summary}\n"
+    # Format call summary for Call Notes column (required format for Personal Lines)
+    # Required format:
+    # Call Placed At: {{start_time}}
+    # Did Client Answer: Yes/No
+    # Was Full Message Conveyed: Yes/No (Yes = AI reached the transfer question while caller was on the line)
+    # Was Voicemail Left: Yes/No
+    
+    # Get call start time
+    start_time_str = call_data.get('startedAt') or call_data.get('createdAt', '')
+    if start_time_str:
+        try:
+            # Parse ISO format and convert to Pacific Time
+            start_time_utc = datetime.fromisoformat(start_time_str.replace('Z', '+00:00'))
+            pacific_tz = ZoneInfo("America/Los_Angeles")
+            start_time_pacific = start_time_utc.astimezone(pacific_tz)
+            call_placed_at = start_time_pacific.strftime('%Y-%m-%d %H:%M:%S')
+        except:
+            # Fallback to current time if parsing fails
+            call_placed_at = datetime.now(ZoneInfo("America/Los_Angeles")).strftime('%Y-%m-%d %H:%M:%S')
+    else:
+        call_placed_at = datetime.now(ZoneInfo("America/Los_Angeles")).strftime('%Y-%m-%d %H:%M:%S')
+    
+    # Determine if client answered
+    # Client answered if endedReason is NOT: voicemail, customer-did-not-answer, customer-busy, twilio-failed-to-connect-call
+    no_answer_reasons = [
+        'voicemail',
+        'customer-did-not-answer',
+        'customer-busy',
+        'twilio-failed-to-connect-call',
+        'assistant-error'
+    ]
+    did_client_answer = 'No' if ended_reason in no_answer_reasons else 'Yes'
+    
+    # Determine if full message was conveyed
+    # Full message conveyed = AI reached the transfer question while caller was on the line
+    # This means: client answered AND (transfer occurred OR conversation happened)
+    was_full_message_conveyed = 'No'
+    if did_client_answer == 'Yes':
+        # Check if transfer occurred or if there was meaningful conversation
+        if ended_reason == 'assistant-forwarded-call':
+            was_full_message_conveyed = 'Yes'  # Transfer means full message was conveyed
+        elif ended_reason == 'customer-ended-call':
+            # Check if there's analysis/summary indicating conversation happened
+            if analysis and summary and summary != 'No summary available':
+                # If there's a meaningful summary, assume message was conveyed
+                was_full_message_conveyed = 'Yes'
+            else:
+                was_full_message_conveyed = 'No'
+        else:
+            was_full_message_conveyed = 'No'
+    
+    # Determine if voicemail was left
+    was_voicemail_left = 'Yes' if is_voicemail else 'No'
+    
+    # Format call notes entry in required format
+    # Include both the structured format AND the original analysis summary
+    call_notes_structured = f"""Call Placed At: {call_placed_at}
+Did Client Answer: {did_client_answer}
+Was Full Message Conveyed: {was_full_message_conveyed}
+Was Voicemail Left: {was_voicemail_left}
+"""
+    
+    # Add the original analysis summary if available (for voicemail, use "Left voicemail")
+    if is_voicemail:
+        call_notes_summary = 'Left voicemail'
+    else:
+        call_notes_summary = summary if summary and summary != 'No summary available' else ''
+    
+    # Combine structured format with summary
+    if call_notes_summary:
+        call_notes_entry = call_notes_structured + f"\n{call_notes_summary}\n"
+    else:
+        call_notes_entry = call_notes_structured
     
     # Get existing call notes
     existing_notes = customer.get('call_notes', '') or customer.get('renewal_call_notes', '')
     
-    # Append summary to existing notes (similar to CL1 Project format)
+    # Append summary to existing notes (separate each call with separator)
     if existing_notes:
         new_call_notes = existing_notes + "\n---\n" + call_notes_entry
     else:
