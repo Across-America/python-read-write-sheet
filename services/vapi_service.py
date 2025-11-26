@@ -123,6 +123,61 @@ def format_date_for_speech(date_str):
     return date_str  # Return original if parsing fails
 
 
+def expand_lob_abbreviation(lob_abbrev):
+    """
+    Expand LOB abbreviation to full form for speech
+    
+    Examples:
+        "MHOME" -> "Mobile home"
+        "HOME" -> "Home"
+        "AUTOP" -> "Auto"
+        "FLOOD" -> "Flood"
+    
+    Args:
+        lob_abbrev: LOB abbreviation from Smartsheet
+    
+    Returns:
+        str: Full form of LOB for speech (e.g., "Mobile home policy")
+    """
+    if not lob_abbrev:
+        return ""
+    
+    lob_upper = str(lob_abbrev).strip().upper()
+    
+    # LOB abbreviation to full form mapping
+    # Based on user-provided mapping table and N1 Project sheet values
+    lob_mapping = {
+        # User-provided mappings (all HO types end with "Home")
+        "HO3": "Primary Home",
+        "HO4": "Renters Home",
+        "HO6": "Condo Home",
+        "DP3": "Landlord",
+        "MHOME": "Mobile home",
+        # Existing sheet values
+        "HOME": "Home",
+        "AUTOP": "Auto",
+        "FLOOD": "Flood",
+        "EQ": "Earthquake",
+        "DFIRE": "Dwelling fire",
+        "CPL": "Commercial package",
+        "PROP": "Property",
+        "PUMBR": "Personal umbrella",
+        # Add more mappings as needed
+    }
+    
+    # Check exact match first
+    if lob_upper in lob_mapping:
+        return lob_mapping[lob_upper]
+    
+    # Check if it contains any abbreviation
+    for abbrev, full_form in lob_mapping.items():
+        if abbrev in lob_upper:
+            return full_form
+    
+    # If no mapping found, return original (capitalize first letter of each word)
+    return lob_abbrev.title()
+
+
 class VAPIService:
     """Service for interacting with VAPI API"""
 
@@ -503,14 +558,48 @@ class VAPIService:
         # Use first customer's data for variable values (for batch calls)
         first_customer = customers[0] if customers else {}
 
+        # Get offered_premium and format it for speech if available
+        # For renewal workflow, amount_due and renewal_payment should use the same value (offered_premium)
+        offered_premium = first_customer.get('offered_premium', '') or first_customer.get('Offered Premium', '')
+        
+        # Use offered_premium for amount_due if available, otherwise fall back to amount_due field
+        amount_due_value = offered_premium if offered_premium else first_customer.get('amount_due', '0')
+        
+        # Format amounts for speech
+        amount_due_formatted = format_amount_for_speech(amount_due_value)
+        renewal_payment = amount_due_formatted  # Same value as amount_due
+        
+        # Get expiration date and format it for speech
+        expiration_date_str = first_customer.get('expiration_date', '') or first_customer.get('expiration date', '')
+        expiration_date_formatted = format_date_for_speech(expiration_date_str) if expiration_date_str else ''
+        
         assistant_overrides = {
             "variableValues": {
                 "company": first_customer.get('company', 'Customer'),
-                "amount_due": format_amount_for_speech(first_customer.get('amount_due', '0')),
+                "Company": first_customer.get('company', 'Customer'),  # Support both lowercase and capitalized
+                "amount_due": amount_due_formatted,  # Use offered_premium if available
                 "cancellation_date": format_date_for_speech(first_customer.get('cancellation_date', '')),
                 "phone_number": first_customer.get('phone_number', ''),
                 "policy_number": first_customer.get('policy_number', ''),
-                "client_id": first_customer.get('client_id', '')
+                "client_id": first_customer.get('client_id', ''),
+                "renewal_payment": renewal_payment,  # Same as amount_due (both use offered_premium)
+                # Variables for first message - using underscore format (matching VAPI Assistant after user's update)
+                "First_Name": first_customer.get('first_name', '') or first_customer.get('First Name', ''),
+                "first_name": first_customer.get('first_name', '') or first_customer.get('First Name', ''),
+                "Last_Name": first_customer.get('last_name', '') or first_customer.get('Last Name', ''),
+                "last_name": first_customer.get('last_name', '') or first_customer.get('Last Name', ''),
+                # Expand LOB abbreviation to full form for speech (e.g., "MHOME" -> "Mobile home")
+                "LOB": expand_lob_abbreviation(first_customer.get('lob', '') or first_customer.get('LOB', '')),
+                "lob": expand_lob_abbreviation(first_customer.get('lob', '') or first_customer.get('LOB', '')),
+                "Company": first_customer.get('company', 'Customer'),
+                "company": first_customer.get('company', 'Customer'),
+                "Expiration_Date": expiration_date_formatted,
+                "expiration_date": expiration_date_formatted,
+                # Also keep space versions for backward compatibility (in case assistant still uses them)
+                "First Name": first_customer.get('first_name', '') or first_customer.get('First Name', ''),
+                "Last Name": first_customer.get('last_name', '') or first_customer.get('Last Name', ''),
+                "Expiration Date": expiration_date_formatted,
+                "renewal payment": renewal_payment
             }
         }
 
@@ -530,10 +619,82 @@ class VAPIService:
             if amount_display and not str(amount_display).startswith('$'):
                 amount_display = f"${amount_display}"
 
+            # Get offered premium for this customer
+            customer_premium = customer.get('offered_premium', '') or customer.get('Offered Premium', '')
+            
+            # Get expiration date for display
+            expiration_date_str = customer.get('expiration_date', '') or customer.get('expiration date', '')
+            expiration_display = format_date_for_speech(expiration_date_str) if expiration_date_str else 'N/A'
+            
+            # Format renewal payment for display
+            renewal_payment_display = ''
+            if customer_premium:
+                renewal_payment_display = format_amount_for_speech(customer_premium)
+            
             print(f"   📞 {customer.get('company', 'Unknown')} - {formatted_phone}")
             print(f"      Amount Due: {amount_display}")
             print(f"      Cancellation Date: {customer.get('cancellation_date', 'N/A')}")
+            print(f"      Renewal Date (Expiration Date): {expiration_display}")
+            if customer_premium:
+                print(f"      Offered Premium: {customer_premium}")
+                print(f"      Renewal Payment (formatted): {renewal_payment_display}")
 
+        # Debug: Print variable values being sent
+        print(f"\n📋 传递给 VAPI 的变量值:")
+        print("-" * 80)
+        for key, value in assistant_overrides.get("variableValues", {}).items():
+            if value:  # Only show non-empty values
+                print(f"  {key}: {value}")
+        print("-" * 80)
+        
+        # 特别显示 renewal date 和 renewal amount
+        print(f"\n💰 Renewal 信息:")
+        print("-" * 80)
+        renewal_payment_var = assistant_overrides.get("variableValues", {}).get("renewal payment") or assistant_overrides.get("variableValues", {}).get("renewal_payment", "")
+        expiration_date_var = assistant_overrides.get("variableValues", {}).get("Expiration Date") or assistant_overrides.get("variableValues", {}).get("expiration_date", "")
+        print(f"  Renewal Date: {expiration_date_var if expiration_date_var else '(空)'}")
+        print(f"  Renewal Amount: {renewal_payment_var if renewal_payment_var else '(空)'}")
+        print("-" * 80)
+        
+        # 调试：显示 First Message 中使用的关键变量（下划线版本）
+        print(f"\n🔍 First Message 关键变量检查 (下划线格式):")
+        print("-" * 80)
+        first_message_vars_underscore = {
+            "First_Name": assistant_overrides.get("variableValues", {}).get("First_Name", ""),
+            "Last_Name": assistant_overrides.get("variableValues", {}).get("Last_Name", ""),
+            "LOB": assistant_overrides.get("variableValues", {}).get("LOB", ""),
+            "Company": assistant_overrides.get("variableValues", {}).get("Company", ""),
+            "Expiration_Date": assistant_overrides.get("variableValues", {}).get("Expiration_Date", ""),
+            "renewal_payment": renewal_payment_var
+        }
+        for var_name, var_value in first_message_vars_underscore.items():
+            status = "✅" if var_value else "❌"
+            print(f"  {status} {{{{ {var_name} }}}}: {var_value if var_value else '(空 - 可能导致替换失败)'}")
+        print("-" * 80)
+        
+        # 也显示空格版本（向后兼容）
+        print(f"\n🔍 First Message 关键变量检查 (空格格式 - 向后兼容):")
+        print("-" * 80)
+        first_message_vars_space = {
+            "First Name": assistant_overrides.get("variableValues", {}).get("First Name", ""),
+            "Last Name": assistant_overrides.get("variableValues", {}).get("Last Name", ""),
+            "LOB": assistant_overrides.get("variableValues", {}).get("LOB", ""),
+            "Company": assistant_overrides.get("variableValues", {}).get("Company", ""),
+            "Expiration Date": expiration_date_var,
+            "renewal payment": renewal_payment_var
+        }
+        for var_name, var_value in first_message_vars_space.items():
+            status = "✅" if var_value else "❌"
+            print(f"  {status} {{{{ {var_name} }}}}: {var_value if var_value else '(空 - 可能导致替换失败)'}")
+        print("-" * 80)
+        
+        # 调试：显示完整的 payload（仅变量部分）
+        import json
+        print(f"\n📦 完整 variableValues (JSON):")
+        print("-" * 80)
+        print(json.dumps(assistant_overrides.get("variableValues", {}), indent=2, ensure_ascii=False))
+        print("-" * 80)
+        
         # Prepare payload with the specified assistant
         payload = {
             "assistantId": assistant_id,
