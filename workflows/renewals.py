@@ -636,8 +636,11 @@ def update_after_renewal_call(smartsheet_service, customer, call_data, call_stag
     # Format call notes entry in required format
     # Include both the structured format AND the original analysis summary
     call_notes_structured = f"""Call Placed At: {call_placed_at}
+
 Did Client Answer: {did_client_answer}
+
 Was Full Message Conveyed: {was_full_message_conveyed}
+
 Was Voicemail Left: {was_voicemail_left}
 """
     
@@ -647,9 +650,9 @@ Was Voicemail Left: {was_voicemail_left}
     else:
         call_notes_summary = summary if summary and summary != 'No summary available' else ''
     
-    # Combine structured format with summary
+    # Combine structured format with summary (add "analysis:" label)
     if call_notes_summary:
-        call_notes_entry = call_notes_structured + f"\n{call_notes_summary}\n"
+        call_notes_entry = call_notes_structured + f"\nanalysis:\n\n{call_notes_summary}\n"
     else:
         call_notes_entry = call_notes_structured
     
@@ -854,13 +857,15 @@ def run_renewal_batch_calling(test_mode=False, schedule_at=None, auto_confirm=Fa
     
     for stage, customers in customers_by_stage.items():
         if customers:
-            stage_name = ["1st", "2nd", "3rd"][stage]
+            stage_names_short = ["1st", "2nd", "3rd", "Final"]
+            stage_name = stage_names_short[stage] if stage < len(stage_names_short) else f"Stage {stage}"
             assistant_id = get_renewal_assistant_id_for_stage(stage)
             print(f"\n🔔 Stage {stage} ({stage_name} Renewal Reminder) - {len(customers)} customers:")
             print(f"   🤖 Assistant ID: {assistant_id}")
             
             for i, customer in enumerate(customers[:5], 1):
-                print(f"   {i}. {customer.get('company', 'Unknown')} - {customer.get('phone_number')}")
+                phone = customer.get('phone_number') or customer.get('client_phone_number', 'N/A')
+                print(f"   {i}. {customer.get('company', 'Unknown')} - {phone}")
             
             if len(customers) > 5:
                 print(f"   ... and {len(customers) - 5} more")
@@ -906,7 +911,8 @@ def run_renewal_batch_calling(test_mode=False, schedule_at=None, auto_confirm=Fa
             # Test mode: Simulate calls without actual API calls
             print(f"\n🧪 TEST MODE: Simulating {len(customers)} renewal calls...")
             for customer in customers:
-                print(f"   ✅ [SIMULATED] Would call: {customer.get('company', 'Unknown')} - {customer.get('phone_number')}")
+                phone = customer.get('phone_number') or customer.get('client_phone_number', 'N/A')
+                print(f"   ✅ [SIMULATED] Would call: {customer.get('company', 'Unknown')} - {phone}")
                 total_success += 1
         else:
             # Stage 0: Batch calling (all customers simultaneously)

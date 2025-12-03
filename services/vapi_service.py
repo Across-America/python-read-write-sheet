@@ -812,3 +812,35 @@ class VAPIService:
                 return None
         
         return None
+    
+    def get_recent_calls(self, limit=100):
+        """
+        Get recent calls from VAPI
+        
+        Args:
+            limit (int): Maximum number of calls to retrieve
+            
+        Returns:
+            list: List of call records
+        """
+        try:
+            response = requests.get(
+                f"{self.base_url}/call",
+                headers={
+                    "Authorization": f"Bearer {self.api_key}"
+                },
+                params={
+                    "limit": limit
+                }
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                calls = data.get('data', []) if isinstance(data, dict) else data
+                return calls if isinstance(calls, list) else []
+            else:
+                print(f"❌ Failed to get recent calls: {response.status_code}")
+                return []
+        except Exception as e:
+            print(f"❌ Error getting recent calls: {e}")
+            return []

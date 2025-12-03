@@ -75,8 +75,8 @@ RENEWAL_SHEET_NAME_PATTERN = "Personal Line - {month_year}"  # e.g., "Personal L
 # ========================================
 # Sheet Configuration
 # ========================================
-# Current Sheet: "11. November PLR" (production sheet)
-# Location: ASI -> Personal Line -> Task Prototype -> Renewal/Non-renewal -> 11. November PLR
+# Current Sheet: "12. December PLR" (production sheet)
+# Location: ASI -> Personal Line -> Task Prototype -> Renewal/Non-renewal -> 12. December PLR
 # 
 # Note: DEV sheet no longer exists. Using production sheet for all operations.
 # 
@@ -85,7 +85,7 @@ RENEWAL_SHEET_NAME_PATTERN = "Personal Line - {month_year}"  # e.g., "Personal L
 # 2. Update RENEWAL_PLR_SHEET_NAME_PATTERN if naming convention changes
 # ========================================
 
-RENEWAL_PLR_SHEET_ID = 4983360750309252  # "11. November PLR" - current month sheet
+RENEWAL_PLR_SHEET_ID = 1719628607737732  # "12. December PLR" - current month sheet
 RENEWAL_PLR_SHEET_NAME_PATTERN = "{month_number}. {month_name} PLR"  # e.g., "11. November PLR"
 
 # Renewal Timeline Configuration (based on UW team feedback)

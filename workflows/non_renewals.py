@@ -522,7 +522,46 @@ def update_after_non_renewal_call(smartsheet_service, customer, call_data, call_
         call_notes_summary = 'Left voicemail'
     else:
         call_notes_summary = summary
-    call_notes_entry = f"[Non-Renewal Call #{call_number} - {timestamp}]\n{call_notes_summary}\n"
+    
+    # Format call notes in required format (same as renewal workflow)
+    call_placed_at = timestamp
+    ended_reason = call_data.get('endedReason', '')
+    is_voicemail_call = (ended_reason == 'voicemail')
+    
+    # Determine if client answered
+    no_answer_reasons = [
+        'voicemail',
+        'customer-did-not-answer',
+        'customer-busy',
+        'twilio-failed-to-connect-call',
+        'assistant-error'
+    ]
+    did_client_answer = 'No' if ended_reason in no_answer_reasons else 'Yes'
+    
+    # Determine if full message was conveyed
+    was_full_message_conveyed = 'No'
+    if did_client_answer == 'Yes':
+        if ended_reason == 'assistant-forwarded-call':
+            was_full_message_conveyed = 'Yes'
+        elif ended_reason == 'customer-ended-call':
+            if analysis and summary and summary != 'No summary available':
+                was_full_message_conveyed = 'Yes'
+    
+    was_voicemail_left = 'Yes' if is_voicemail_call else 'No'
+    
+    call_notes_structured = f"""Call Placed At: {call_placed_at}
+
+Did Client Answer: {did_client_answer}
+
+Was Full Message Conveyed: {was_full_message_conveyed}
+
+Was Voicemail Left: {was_voicemail_left}
+"""
+    
+    if call_notes_summary:
+        call_notes_entry = call_notes_structured + f"\nanalysis:\n\n{call_notes_summary}\n"
+    else:
+        call_notes_entry = call_notes_structured
     
     # Get existing call notes
     existing_notes = customer.get('call_notes', '') or customer.get('non_renewal_call_notes', '')
