@@ -1,11 +1,11 @@
 """
 N1 Project - Direct Bill Workflow
 Payment Reminder Calls for Direct Billed Policies
-3-stage calling: 14 days before, 7 days before, day of (if payment not made)
+3-stage calling: 14 days before, 7 days before, 1 day before expiration
 EFT policies do not need follow-ups
 
 Note: This workflow is part of the N1 Project, based on the renewal sheet.
-It handles the same customers as Renewal workflow but based on payment_due_date instead of expiration_date.
+All date calculations are based on the expiration_date column (same as Renewal and Non-Renewal workflows).
 """
 
 from datetime import datetime, timedelta
@@ -66,7 +66,7 @@ def should_skip_direct_bill_row(customer):
     - done is checked/true
     - company is empty
     - phone_number is empty
-    - payment_due_date is empty
+    - expiration_date is empty
     - payee is not "direct billed"
     - payment_status is not "pending payment"
     - renewal / non-renewal is not "renewal"
@@ -88,10 +88,10 @@ def should_skip_direct_bill_row(customer):
     if not customer.get('phone_number', '').strip():
         return True, "Phone number is empty"
 
-    # Check payment due date
-    payment_due_date = customer.get('payment_due_date', '') or customer.get('due_date', '')
-    if not payment_due_date:
-        return True, "Payment due date is empty"
+    # Check expiration date (all N1 Project workflows use expiration_date)
+    expiration_date = customer.get('expiration_date', '') or customer.get('expiration date', '')
+    if not expiration_date:
+        return True, "Expiration date is empty"
 
     # Check payee - must be "direct billed"
     payee = str(customer.get('payee', '')).strip().lower()
@@ -115,6 +115,8 @@ def should_skip_direct_bill_row(customer):
 def is_direct_bill_ready_for_calling(customer, today):
     """
     Check if a direct bill customer is ready for calling based on timeline logic
+    All date calculations are based on the expiration_date column (same as Renewal and Non-Renewal workflows)
+    Weekend-aware: If target date falls on weekend, calls are made on the previous Friday
     
     Args:
         customer: Customer dict
@@ -123,31 +125,56 @@ def is_direct_bill_ready_for_calling(customer, today):
     Returns:
         tuple: (is_ready: bool, reason: str, stage: int)
     """
-    # Parse payment due date
-    payment_due_date_str = customer.get('payment_due_date', '') or customer.get('due_date', '')
-    payment_due_date = parse_date(payment_due_date_str)
+    # Skip if today is weekend (no calls on weekends)
+    if is_weekend(today):
+        return False, f"Today is {today.strftime('%A')} (weekend) - no calls on weekends", -1
     
-    if not payment_due_date:
-        return False, "Invalid payment due date", -1
+    # Parse expiration date from sheet (this is the base date for all calculations)
+    expiry_date_str = customer.get('expiration_date', '') or customer.get('expiration date', '')
+    expiry_date = parse_date(expiry_date_str)
     
-    # Calculate days until payment due
-    days_until_due = (payment_due_date - today).days
+    if not expiry_date:
+        return False, "Invalid expiration date", -1
     
-    # Check if payment is overdue (skip if overdue)
-    if days_until_due < 0:
-        return False, f"Payment overdue by {abs(days_until_due)} days (skip)", -1
+    # Calculate days until expiry (based on expiration_date column)
+    days_until_expiry = (expiry_date - today).days
     
-    # Check if it matches any scheduled day (14, 7, or 1 days before)
+    # Check if already expired (skip if expired)
+    if days_until_expiry < 0:
+        return False, f"Policy already expired ({abs(days_until_expiry)} days ago)", -1
+    
+    # Check if today matches any of the calling schedule days (14, 7, or 1 days before)
+    # If target date falls on weekend, adjust to previous Friday
     for stage, days_before in enumerate(DIRECT_BILL_CALLING_SCHEDULE):
-        if days_until_due == days_before:
-            return True, f"Ready for stage {stage} call ({days_before} days before due)", stage
+        target_date = expiry_date - timedelta(days=days_before)
+        
+        # If target date is weekend, adjust to previous Friday
+        if is_weekend(target_date):
+            # Calculate days to go back to Friday
+            # Saturday (weekday=5) -> go back 1 day to Friday
+            # Sunday (weekday=6) -> go back 2 days to Friday
+            if target_date.weekday() == 5:  # Saturday
+                days_to_friday = 1
+            else:  # Sunday (weekday=6)
+                days_to_friday = 2
+            
+            adjusted_target_date = target_date - timedelta(days=days_to_friday)
+            adjusted_days_before = (expiry_date - adjusted_target_date).days
+            
+            # Check if today matches the adjusted target date
+            if today == adjusted_target_date:
+                return True, f"Ready for stage {stage} call (adjusted from {days_before} days to {adjusted_days_before} days before expiry - target was {target_date.strftime('%A')})", stage
+        else:
+            # Target date is weekday, check if today matches
+            if today == target_date:
+                return True, f"Ready for stage {stage} call ({days_before} days before expiry)", stage
     
     # If within calling window but not on scheduled day
-    if days_until_due <= max(DIRECT_BILL_CALLING_SCHEDULE):
-        return False, f"Within calling window but not on scheduled day (due in {days_until_due} days)", -1
+    if days_until_expiry <= max(DIRECT_BILL_CALLING_SCHEDULE):
+        return False, f"Within calling window but not on scheduled day (expires in {days_until_expiry} days)", -1
     
     # Too early
-    return False, f"Too early to call (due in {days_until_due} days)", -1
+    return False, f"Too early to call (expires in {days_until_expiry} days)", -1
 
 
 def get_direct_bill_stage(customer):
@@ -177,7 +204,7 @@ def get_direct_bill_stage(customer):
 def calculate_direct_bill_next_followup_date(customer, current_stage):
     """
     Calculate the next follow-up date for direct bill calls
-    Based on the fixed schedule: 14, 7, 1 days before payment due
+    Based on the fixed schedule: 14, 7, 1 days before expiration date
     
     Args:
         customer: Customer dict
@@ -186,23 +213,23 @@ def calculate_direct_bill_next_followup_date(customer, current_stage):
     Returns:
         date or None: Next follow-up date (None for stage 2/final)
     """
-    payment_due_date_str = customer.get('payment_due_date', '') or customer.get('due_date', '')
-    payment_due_date = parse_date(payment_due_date_str)
+    expiry_date_str = customer.get('expiration_date', '') or customer.get('expiration date', '')
+    expiry_date = parse_date(expiry_date_str)
     
-    if not payment_due_date:
-        print(f"   ⚠️  Invalid payment due date: {payment_due_date_str}")
+    if not expiry_date:
+        print(f"   ⚠️  Invalid expiration date: {expiry_date_str}")
         return None
     
     # Stage 0 → 1: Next call at 7 days before (from schedule)
     if current_stage == 0:
         next_days_before = DIRECT_BILL_CALLING_SCHEDULE[1]  # 7 days
-        next_date = payment_due_date - timedelta(days=next_days_before)
+        next_date = expiry_date - timedelta(days=next_days_before)
         return next_date
     
     # Stage 1 → 2: Next call at 1 day before (from schedule)
     elif current_stage == 1:
         next_days_before = DIRECT_BILL_CALLING_SCHEDULE[2]  # 1 day before
-        next_date = payment_due_date - timedelta(days=next_days_before)
+        next_date = expiry_date - timedelta(days=next_days_before)
         return next_date
     
     # Stage 2: No more calls
@@ -398,11 +425,11 @@ def run_direct_bill_batch_calling(test_mode=False, schedule_at=None, auto_confir
     
     for stage, customers in customers_by_stage.items():
         if customers:
-            stage_names = {0: "1st Reminder (14 days before)", 1: "2nd Reminder (7 days before)", 2: "3rd Reminder (day of)"}
+            stage_names = {0: "1st Reminder (14 days before)", 1: "2nd Reminder (7 days before)", 2: "3rd Reminder (1 day before)"}
             print(f"\n   Stage {stage} - {stage_names[stage]}: {len(customers)} customers")
             for i, customer in enumerate(customers[:5], 1):
-                payment_due = customer.get('payment_due_date', '') or customer.get('due_date', 'N/A')
-                print(f"      {i}. {customer.get('company', 'Unknown')} - Due: {payment_due}")
+                expiry_date = customer.get('expiration_date', '') or customer.get('expiration date', 'N/A')
+                print(f"      {i}. {customer.get('company', 'Unknown')} - Expires: {expiry_date}")
             if len(customers) > 5:
                 print(f"      ... and {len(customers) - 5} more")
     

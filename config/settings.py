@@ -95,7 +95,8 @@ RENEWAL_CALLING_START_DAY = 1   # Start calling on 1st of each month
 
 # Direct Bill Timeline Configuration
 # Contact schedule: 14 days before, 7 days before, 1 day before (shared with Non-Renewal)
-DIRECT_BILL_CALLING_SCHEDULE = [14, 7, 1]  # Days before payment due date to call
+# Based on expiration_date column (same as Renewal and Non-Renewal workflows)
+DIRECT_BILL_CALLING_SCHEDULE = [14, 7, 1]  # Days before expiration date to call
 
 # Non-Renewal Timeline Configuration
 # Contact schedule: 14 days before, 7 days before, 1 day before (same as Direct Bill)

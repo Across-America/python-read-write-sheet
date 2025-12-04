@@ -336,6 +336,7 @@ def get_renewal_assistant_id_for_stage(stage):
 def is_renewal_ready_for_calling(customer, today):
     """
     Check if a renewal customer is ready for calling based on timeline logic
+    Weekend-aware: If target date falls on weekend, calls are made on the previous Friday
     
     All date calculations are based on the expiration_date column:
     - 14 days before expiration_date → Stage 0 (1st Reminder)
@@ -350,6 +351,10 @@ def is_renewal_ready_for_calling(customer, today):
     Returns:
         tuple: (is_ready: bool, reason: str, stage: int)
     """
+    # Skip if today is weekend (no calls on weekends)
+    if is_weekend(today):
+        return False, f"Today is {today.strftime('%A')} (weekend) - no calls on weekends", -1
+    
     # Parse expiration date from sheet (this is the base date for all calculations)
     expiry_date_str = customer.get('expiration_date', '') or customer.get('expiration date', '')
     expiry_date = parse_date(expiry_date_str)
@@ -369,9 +374,30 @@ def is_renewal_ready_for_calling(customer, today):
         return False, f"Not yet calling day (start on day {RENEWAL_CALLING_START_DAY})", -1
     
     # Check if today matches any of the calling schedule days
+    # If target date falls on weekend, adjust to previous Friday
     for stage, days_before in enumerate(RENEWAL_CALLING_SCHEDULE):
-        if days_until_expiry == days_before:
-            return True, f"Ready for stage {stage} call ({days_before} days before expiry)", stage
+        target_date = expiry_date - timedelta(days=days_before)
+        
+        # If target date is weekend, adjust to previous Friday
+        if is_weekend(target_date):
+            # Calculate days to go back to Friday
+            # Saturday (weekday=5) -> go back 1 day to Friday
+            # Sunday (weekday=6) -> go back 2 days to Friday
+            if target_date.weekday() == 5:  # Saturday
+                days_to_friday = 1
+            else:  # Sunday (weekday=6)
+                days_to_friday = 2
+            
+            adjusted_target_date = target_date - timedelta(days=days_to_friday)
+            adjusted_days_before = (expiry_date - adjusted_target_date).days
+            
+            # Check if today matches the adjusted target date
+            if today == adjusted_target_date:
+                return True, f"Ready for stage {stage} call (adjusted from {days_before} days to {adjusted_days_before} days before expiry - target was {target_date.strftime('%A')})", stage
+        else:
+            # Target date is weekday, check if today matches
+            if today == target_date:
+                return True, f"Ready for stage {stage} call ({days_before} days before expiry)", stage
     
     # Check if we're within the calling window but not on a scheduled day
     if days_until_expiry <= max(RENEWAL_CALLING_SCHEDULE):
