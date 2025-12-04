@@ -184,8 +184,12 @@ def validate_renewal_customer_data(customer):
             errors.append(f"Invalid expiration date format: {expiry_field}")
         else:
             # Check if date is in the past (expired)
+            # Use Pacific timezone for consistent date comparison
             from datetime import date
-            if expiry_date < date.today():
+            from zoneinfo import ZoneInfo
+            pacific_tz = ZoneInfo("America/Los_Angeles")
+            today_pacific = datetime.now(pacific_tz).date()
+            if expiry_date < today_pacific:
                 errors.append(f"Policy already expired: {expiry_date}")
             else:
                 validated['expiration_date'] = expiry_date
