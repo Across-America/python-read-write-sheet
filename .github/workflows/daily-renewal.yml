@@ -15,9 +15,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          ref: master
-          fetch-depth: 0  # Fetch all history to ensure we have the latest code
 
       - name: Setup Python
         uses: actions/setup-python@v5
