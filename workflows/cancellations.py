@@ -107,11 +107,12 @@ def should_skip_row(customer):
     Check if a row should be skipped based on initial validation rules
 
     Skip if ANY of:
-    - company is empty
     - amount_due is empty
     - cancellation_date is empty
     - done is checked/true
     - cancellation_date is not after f_u_date
+
+    Note: Company field is not required (removed validation)
 
     Args:
         customer: Customer dict
@@ -123,10 +124,7 @@ def should_skip_row(customer):
     if customer.get('done?') in [True, 'true', 'True', 1]:
         return True, "Done checkbox is checked"
 
-    # Check required fields
-    if not customer.get('company', '').strip():
-        return True, "Company is empty"
-
+    # Check required fields (company is no longer required)
     if not customer.get('amount_due', '').strip():
         return True, "Amount Due is empty"
 
@@ -326,6 +324,7 @@ def format_call_entry(summary, evaluation, call_number):
 def update_after_call(smartsheet_service, customer, call_data, current_stage):
     """
     Update Smartsheet after a successful call
+    Uses the same call notes format as N1 project (renewals)
 
     Args:
         smartsheet_service: SmartsheetService instance
@@ -335,12 +334,29 @@ def update_after_call(smartsheet_service, customer, call_data, current_stage):
     """
     # Extract call analysis
     analysis = call_data.get('analysis', {})
-    summary = analysis.get('summary', 'No summary available')
+    
+    # Check if this is a voicemail call
+    ended_reason = call_data.get('endedReason', '')
+    is_voicemail = (ended_reason == 'voicemail')
+    
+    summary = analysis.get('summary', '') if analysis else ''
+    if not summary or summary == '':
+        # Try alternative locations for summary
+        if analysis:
+            summary = analysis.get('transcript', '') or analysis.get('summaryText', '') or 'No summary available'
+        else:
+            # If no analysis and it's voicemail, use "Left voicemail" instead of "No summary available"
+            if is_voicemail:
+                summary = 'Left voicemail'
+            else:
+                summary = 'No summary available'
+        if summary == 'No summary available':
+            print(f"⚠️  WARNING: No summary found in analysis")
+            print(f"   Analysis keys: {list(analysis.keys()) if analysis else 'N/A'}")
 
     # Get evaluation with fallback to structured data
     evaluation = analysis.get('successEvaluation')
     if not evaluation:
-        # Try to get from structured data
         structured_data = analysis.get('structuredData', {})
         if structured_data:
             evaluation = structured_data.get('success', 'N/A')
@@ -355,33 +371,142 @@ def update_after_call(smartsheet_service, customer, call_data, current_stage):
     # Calculate next followup date (None for stage 3)
     next_followup_date = calculate_next_followup_date(customer, current_stage)
 
-    # Determine if done (only for stage 3)
-    # mark_done = (new_stage >= 3)  # Commented out - wait for manual verification
-
-    # Format entries for appending
+    # Format entries for appending (for ai_call_eval column - keep old format for eval)
     call_number = current_stage + 1
-    summary_entry, eval_entry = format_call_entry(summary, evaluation, call_number)
+    _, eval_entry = format_call_entry(summary, evaluation, call_number)
 
     # Get existing values
-    existing_summary = customer.get('ai_call_summary', '')
     existing_eval = customer.get('ai_call_eval', '')
 
-    # Append or create
-    if existing_summary:
-        new_summary = existing_summary + "\n---\n" + summary_entry
-    else:
-        new_summary = summary_entry
-
+    # Append or create for eval (keep old format)
     if existing_eval:
         new_eval = existing_eval + "\n---\n" + eval_entry
     else:
         new_eval = eval_entry
 
+    # Format call summary for AI Call Summary column (same format as N1 project Call Notes)
+    # Required format:
+    # Call Placed At: {{start_time}}
+    # Did Client Answer: Yes/No
+    # Was Full Message Conveyed: Yes/No (Yes = AI reached the transfer question while caller was on the line)
+    # Was Voicemail Left: Yes/No
+    # analysis:
+    # {{summary}}
+    
+    # Get call start time
+    start_time_str = call_data.get('startedAt') or call_data.get('createdAt', '')
+    if start_time_str:
+        try:
+            # Parse ISO format and convert to Pacific Time
+            start_time_utc = datetime.fromisoformat(start_time_str.replace('Z', '+00:00'))
+            pacific_tz = ZoneInfo("America/Los_Angeles")
+            start_time_pacific = start_time_utc.astimezone(pacific_tz)
+            call_placed_at = start_time_pacific.strftime('%Y-%m-%d %H:%M:%S')
+        except:
+            # Fallback to current time if parsing fails
+            call_placed_at = datetime.now(ZoneInfo("America/Los_Angeles")).strftime('%Y-%m-%d %H:%M:%S')
+    else:
+        call_placed_at = datetime.now(ZoneInfo("America/Los_Angeles")).strftime('%Y-%m-%d %H:%M:%S')
+    
+    # Determine if client answered
+    # Client answered if endedReason is NOT: voicemail, customer-did-not-answer, customer-busy, twilio-failed-to-connect-call
+    no_answer_reasons = [
+        'voicemail',
+        'customer-did-not-answer',
+        'customer-busy',
+        'twilio-failed-to-connect-call',
+        'assistant-error'
+    ]
+    did_client_answer = 'No' if ended_reason in no_answer_reasons else 'Yes'
+    
+    # Determine if full message was conveyed
+    # Full message conveyed = AI reached the transfer question while caller was on the line
+    # This means: client answered AND (transfer occurred OR conversation happened)
+    was_full_message_conveyed = 'No'
+    if did_client_answer == 'Yes':
+        # Check if transfer occurred or if there was meaningful conversation
+        if ended_reason == 'assistant-forwarded-call':
+            was_full_message_conveyed = 'Yes'  # Transfer means full message was conveyed
+        elif ended_reason == 'customer-ended-call':
+            # Check if there's analysis/summary indicating conversation happened
+            if analysis and summary and summary != 'No summary available':
+                # If there's a meaningful summary, assume message was conveyed
+                was_full_message_conveyed = 'Yes'
+            else:
+                was_full_message_conveyed = 'No'
+        else:
+            was_full_message_conveyed = 'No'
+    
+    # Determine if voicemail was left
+    # Check multiple indicators:
+    # 1. endedReason == 'voicemail' (explicit voicemail)
+    # 2. endedReason == 'customer-did-not-answer' AND there's a transcript (assistant left voicemail)
+    # 3. Check transcript for voicemail indicators
+    was_voicemail_left = 'No'
+    duration = call_data.get('duration', 0) or 0
+    
+    if is_voicemail:
+        was_voicemail_left = 'Yes'
+    elif ended_reason == 'customer-did-not-answer':
+        # For customer-did-not-answer, check if there's a transcript indicating voicemail was left
+        transcript = call_data.get('transcript', '') or (analysis.get('transcript', '') if analysis else '')
+        
+        # Only mark as voicemail if:
+        # 1. There's a transcript (meaning call connected and assistant spoke)
+        # 2. Duration > 0 (call actually connected)
+        # 3. Transcript contains voicemail-related keywords OR assistant spoke the full message
+        if transcript and duration > 0:
+            # Check if transcript contains voicemail-related keywords
+            transcript_lower = transcript.lower()
+            has_voicemail_keywords = any(keyword in transcript_lower for keyword in [
+                'voicemail', 'voice mail', 'left a message', 'leaving a message', 
+                'message left', 'recording', 'beep'
+            ])
+            
+            # If assistant spoke (has transcript) and call duration > 0, likely left voicemail
+            # Check if the transcript shows the assistant completed the message
+            if has_voicemail_keywords:
+                was_voicemail_left = 'Yes'
+            elif len(transcript) > 100:  # If transcript is substantial, assistant likely left voicemail
+                was_voicemail_left = 'Yes'
+            # If duration is 0 or no transcript, call didn't connect - no voicemail left
+    
+    # Format call notes entry in required format (same as N1 project)
+    call_notes_structured = f"""Call Placed At: {call_placed_at}
+
+Did Client Answer: {did_client_answer}
+
+Was Full Message Conveyed: {was_full_message_conveyed}
+
+Was Voicemail Left: {was_voicemail_left}
+"""
+    
+    # Add the original analysis summary if available (for voicemail, use "Left voicemail")
+    if is_voicemail or was_voicemail_left == 'Yes':
+        call_notes_summary = 'Left voicemail'
+    else:
+        call_notes_summary = summary if summary and summary != 'No summary available' else ''
+    
+    # Combine structured format with summary (add "analysis:" label)
+    if call_notes_summary:
+        call_notes_entry = call_notes_structured + f"\nanalysis:\n\n{call_notes_summary}\n"
+    else:
+        call_notes_entry = call_notes_structured
+    
+    # Get existing AI Call Summary (this is the column we update)
+    existing_ai_call_summary = customer.get('ai_call_summary', '')
+    
+    # Append call notes entry to existing AI Call Summary (separate each call with separator)
+    if existing_ai_call_summary:
+        new_ai_call_summary = existing_ai_call_summary + "\n---\n" + call_notes_entry
+    else:
+        new_ai_call_summary = call_notes_entry
+
     # Update fields
     updates = {
         'ai_call_stage': new_stage,
-        'ai_call_summary': new_summary,
-        'ai_call_eval': new_eval,
+        'ai_call_summary': new_ai_call_summary,  # Update with formatted call notes (same format as N1 project Call Notes)
+        'ai_call_eval': new_eval,  # Keep old format for eval
         # 'done?': mark_done  # Commented out - wait for manual verification
     }
 
@@ -394,7 +519,7 @@ def update_after_call(smartsheet_service, customer, call_data, current_stage):
     if success:
         print(f"✅ Smartsheet updated successfully")
         print(f"   • Stage: {current_stage} → {new_stage}")
-        # print(f"   • Done: {mark_done}")  # Commented out - wait for manual verification
+        print(f"   • AI Call Summary: Updated with formatted call notes (Call #{call_number})")
         if next_followup_date:
             print(f"   • Next F/U Date: {next_followup_date}")
     else:

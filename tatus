@@ -1,0 +1,237 @@
+[1mdiff --git a/workflows/cancellations.py b/workflows/cancellations.py[m
+[1mindex cfc6b38..2864754 100644[m
+[1m--- a/workflows/cancellations.py[m
+[1m+++ b/workflows/cancellations.py[m
+[36m@@ -107,12 +107,13 @@[m [mdef should_skip_row(customer):[m
+     Check if a row should be skipped based on initial validation rules[m
+ [m
+     Skip if ANY of:[m
+[31m-    - company is empty[m
+     - amount_due is empty[m
+     - cancellation_date is empty[m
+     - done is checked/true[m
+     - cancellation_date is not after f_u_date[m
+ [m
+[32m+[m[32m    Note: Company field is not required (removed validation)[m
+[32m+[m
+     Args:[m
+         customer: Customer dict[m
+ [m
+[36m@@ -123,10 +124,7 @@[m [mdef should_skip_row(customer):[m
+     if customer.get('done?') in [True, 'true', 'True', 1]:[m
+         return True, "Done checkbox is checked"[m
+ [m
+[31m-    # Check required fields[m
+[31m-    if not customer.get('company', '').strip():[m
+[31m-        return True, "Company is empty"[m
+[31m-[m
+[32m+[m[32m    # Check required fields (company is no longer required)[m
+     if not customer.get('amount_due', '').strip():[m
+         return True, "Amount Due is empty"[m
+ [m
+[36m@@ -326,6 +324,7 @@[m [mdef format_call_entry(summary, evaluation, call_number):[m
+ def update_after_call(smartsheet_service, customer, call_data, current_stage):[m
+     """[m
+     Update Smartsheet after a successful call[m
+[32m+[m[32m    Uses the same call notes format as N1 project (renewals)[m
+ [m
+     Args:[m
+         smartsheet_service: SmartsheetService instance[m
+[36m@@ -335,12 +334,29 @@[m [mdef update_after_call(smartsheet_service, customer, call_data, current_stage):[m
+     """[m
+     # Extract call analysis[m
+     analysis = call_data.get('analysis', {})[m
+[31m-    summary = analysis.get('summary', 'No summary available')[m
+[32m+[m[41m    [m
+[32m+[m[32m    # Check if this is a voicemail call[m
+[32m+[m[32m    ended_reason = call_data.get('endedReason', '')[m
+[32m+[m[32m    is_voicemail = (ended_reason == 'voicemail')[m
+[32m+[m[41m    [m
+[32m+[m[32m    summary = analysis.get('summary', '') if analysis else ''[m
+[32m+[m[32m    if not summary or summary == '':[m
+[32m+[m[32m        # Try alternative locations for summary[m
+[32m+[m[32m        if analysis:[m
+[32m+[m[32m            summary = analysis.get('transcript', '') or analysis.get('summaryText', '') or 'No summary available'[m
+[32m+[m[32m        else:[m
+[32m+[m[32m            # If no analysis and it's voicemail, use "Left voicemail" instead of "No summary available"[m
+[32m+[m[32m            if is_voicemail:[m
+[32m+[m[32m                summary = 'Left voicemail'[m
+[32m+[m[32m            else:[m
+[32m+[m[32m                summary = 'No summary available'[m
+[32m+[m[32m        if summary == 'No summary available':[m
+[32m+[m[32m            print(f"⚠️  WARNING: No summary found in analysis")[m
+[32m+[m[32m            print(f"   Analysis keys: {list(analysis.keys()) if analysis else 'N/A'}")[m
+ [m
+     # Get evaluation with fallback to structured data[m
+     evaluation = analysis.get('successEvaluation')[m
+     if not evaluation:[m
+[31m-        # Try to get from structured data[m
+         structured_data = analysis.get('structuredData', {})[m
+         if structured_data:[m
+             evaluation = structured_data.get('success', 'N/A')[m
+[36m@@ -355,33 +371,142 @@[m [mdef update_after_call(smartsheet_service, customer, call_data, current_stage):[m
+     # Calculate next followup date (None for stage 3)[m
+     next_followup_date = calculate_next_followup_date(customer, current_stage)[m
+ [m
+[31m-    # Determine if done (only for stage 3)[m
+[31m-    # mark_done = (new_stage >= 3)  # Commented out - wait for manual verification[m
+[31m-[m
+[31m-    # Format entries for appending[m
+[32m+[m[32m    # Format entries for appending (for ai_call_eval column - keep old format for eval)[m
+     call_number = current_stage + 1[m
+[31m-    summary_entry, eval_entry = format_call_entry(summary, evaluation, call_number)[m
+[32m+[m[32m    _, eval_entry = format_call_entry(summary, evaluation, call_number)[m
+ [m
+     # Get existing values[m
+[31m-    existing_summary = customer.get('ai_call_summary', '')[m
+     existing_eval = customer.get('ai_call_eval', '')[m
+ [m
+[31m-    # Append or create[m
+[31m-    if existing_summary:[m
+[31m-        new_summary = existing_summary + "\n---\n" + summary_entry[m
+[31m-    else:[m
+[31m-        new_summary = summary_entry[m
+[31m-[m
+[32m+[m[32m    # Append or create for eval (keep old format)[m
+     if existing_eval:[m
+         new_eval = existing_eval + "\n---\n" + eval_entry[m
+     else:[m
+         new_eval = eval_entry[m
+ [m
+[32m+[m[32m    # Format call summary for AI Call Summary column (same format as N1 project Call Notes)[m
+[32m+[m[32m    # Required format:[m
+[32m+[m[32m    # Call Placed At: {{start_time}}[m
+[32m+[m[32m    # Did Client Answer: Yes/No[m
+[32m+[m[32m    # Was Full Message Conveyed: Yes/No (Yes = AI reached the transfer question while caller was on the line)[m
+[32m+[m[32m    # Was Voicemail Left: Yes/No[m
+[32m+[m[32m    # analysis:[m
+[32m+[m[32m    # {{summary}}[m
+[32m+[m[41m    [m
+[32m+[m[32m    # Get call start time[m
+[32m+[m[32m    start_time_str = call_data.get('startedAt') or call_data.get('createdAt', '')[m
+[32m+[m[32m    if start_time_str:[m
+[32m+[m[32m        try:[m
+[32m+[m[32m            # Parse ISO format and convert to Pacific Time[m
+[32m+[m[32m            start_time_utc = datetime.fromisoformat(start_time_str.replace('Z', '+00:00'))[m
+[32m+[m[32m            pacific_tz = ZoneInfo("America/Los_Angeles")[m
+[32m+[m[32m            start_time_pacific = start_time_utc.astimezone(pacific_tz)[m
+[32m+[m[32m            call_placed_at = start_time_pacific.strftime('%Y-%m-%d %H:%M:%S')[m
+[32m+[m[32m        except:[m
+[32m+[m[32m            # Fallback to current time if parsing fails[m
+[32m+[m[32m            call_placed_at = datetime.now(ZoneInfo("America/Los_Angeles")).strftime('%Y-%m-%d %H:%M:%S')[m
+[32m+[m[32m    else:[m
+[32m+[m[32m        call_placed_at = datetime.now(ZoneInfo("America/Los_Angeles")).strftime('%Y-%m-%d %H:%M:%S')[m
+[32m+[m[41m    [m
+[32m+[m[32m    # Determine if client answered[m
+[32m+[m[32m    # Client answered if endedReason is NOT: voicemail, customer-did-not-answer, customer-busy, twilio-failed-to-connect-call[m
+[32m+[m[32m    no_answer_reasons = [[m
+[32m+[m[32m        'voicemail',[m
+[32m+[m[32m        'customer-did-not-answer',[m
+[32m+[m[32m        'customer-busy',[m
+[32m+[m[32m        'twilio-failed-to-connect-call',[m
+[32m+[m[32m        'assistant-error'[m
+[32m+[m[32m    ][m
+[32m+[m[32m    did_client_answer = 'No' if ended_reason in no_answer_reasons else 'Yes'[m
+[32m+[m[41m    [m
+[32m+[m[32m    # Determine if full message was conveyed[m
+[32m+[m[32m    # Full message conveyed = AI reached the transfer question while caller was on the line[m
+[32m+[m[32m    # This means: client answered AND (transfer occurred OR conversation happened)[m
+[32m+[m[32m    was_full_message_conveyed = 'No'[m
+[32m+[m[32m    if did_client_answer == 'Yes':[m
+[32m+[m[32m        # Check if transfer occurred or if there was meaningful conversation[m
+[32m+[m[32m        if ended_reason == 'assistant-forwarded-call':[m
+[32m+[m[32m            was_full_message_conveyed = 'Yes'  # Transfer means full message was conveyed[m
+[32m+[m[32m        elif ended_reason == 'customer-ended-call':[m
+[32m+[m[32m            # Check if there's analysis/summary indicating conversation happened[m
+[32m+[m[32m            if analysis and summary and summary != 'No summary available':[m
+[32m+[m[32m                # If there's a meaningful summary, assume message was conveyed[m
+[32m+[m[32m                was_full_message_conveyed = 'Yes'[m
+[32m+[m[32m            else:[m
+[32m+[m[32m                was_full_message_conveyed = 'No'[m
+[32m+[m[32m        else:[m
+[32m+[m[32m            was_full_message_conveyed = 'No'[m
+[32m+[m[41m    [m
+[32m+[m[32m    # Determine if voicemail was left[m
+[32m+[m[32m    # Check multiple indicators:[m
+[32m+[m[32m    # 1. endedReason == 'voicemail' (explicit voicemail)[m
+[32m+[m[32m    # 2. endedReason == 'customer-did-not-answer' AND there's a transcript (assistant left voicemail)[m
+[32m+[m[32m    # 3. Check transcript for voicemail indicators[m
+[32m+[m[32m    was_voicemail_left = 'No'[m
+[32m+[m[32m    duration = call_data.get('duration', 0) or 0[m
+[32m+[m[41m    [m
+[32m+[m[32m    if is_voicemail:[m
+[32m+[m[32m        was_voicemail_left = 'Yes'[m
+[32m+[m[32m    elif ended_reason == 'customer-did-not-answer':[m
+[32m+[m[32m        # For customer-did-not-answer, check if there's a transcript indicating voicemail was left[m
+[32m+[m[32m        transcript = call_data.get('transcript', '') or (analysis.get('transcript', '') if analysis else '')[m
+[32m+[m[41m        [m
+[32m+[m[32m        # Only mark as voicemail if:[m
+[32m+[m[32m        # 1. There's a transcript (meaning call connected and assistant spoke)[m
+[32m+[m[32m        # 2. Duration > 0 (call actually connected)[m
+[32m+[m[32m        # 3. Transcript contains voicemail-related keywords OR assistant spoke the full message[m
+[32m+[m[32m        if transcript and duration > 0:[m
+[32m+[m[32m            # Check if transcript contains voicemail-related keywords[m
+[32m+[m[32m            transcript_lower = transcript.lower()[m
+[32m+[m[32m            has_voicemail_keywords = any(keyword in transcript_lower for keyword in [[m
+[32m+[m[32m                'voicemail', 'voice mail', 'left a message', 'leaving a message',[m[41m [m
+[32m+[m[32m                'message left', 'recording', 'beep'[m
+[32m+[m[32m            ])[m
+[32m+[m[41m            [m
+[32m+[m[32m            # If assistant spoke (has transcript) and call duration > 0, likely left voicemail[m
+[32m+[m[32m            # Check if the transcript shows the assistant completed the message[m
+[32m+[m[32m            if has_voicemail_keywords:[m
+[32m+[m[32m                was_voicemail_left = 'Yes'[m
+[32m+[m[32m            elif len(transcript) > 100:  # If transcript is substantial, assistant likely left voicemail[m
+[32m+[m[32m                was_voicemail_left = 'Yes'[m
+[32m+[m[32m            # If duration is 0 or no transcript, call didn't connect - no voicemail left[m
+[32m+[m[41m    [m
+[32m+[m[32m    # Format call notes entry in required format (same as N1 project)[m
+[32m+[m[32m    call_notes_structured = f"""Call Placed At: {call_placed_at}[m
+[32m+[m
+[32m+[m[32mDid Client Answer: {did_client_answer}[m
+[32m+[m
+[32m+[m[32mWas Full Message Conveyed: {was_full_message_conveyed}[m
+[32m+[m
+[32m+[m[32mWas Voicemail Left: {was_voicemail_left}[m
+[32m+[m[32m"""[m
+[32m+[m[41m    [m
+[32m+[m[32m    # Add the original analysis summary if available (for voicemail, use "Left voicemail")[m
+[32m+[m[32m    if is_voicemail or was_voicemail_left == 'Yes':[m
+[32m+[m[32m        call_notes_summary = 'Left voicemail'[m
+[32m+[m[32m    else:[m
+[32m+[m[32m        call_notes_summary = summary if summary and summary != 'No summary available' else ''[m
+[32m+[m[41m    [m
+[32m+[m[32m    # Combine structured format with summary (add "analysis:" label)[m
+[32m+[m[32m    if call_notes_summary:[m
+[32m+[m[32m        call_notes_entry = call_notes_structured + f"\nanalysis:\n\n{call_notes_summary}\n"[m
+[32m+[m[32m    else:[m
+[32m+[m[32m        call_notes_entry = call_notes_structured[m
+[32m+[m[41m    [m
+[32m+[m[32m    # Get existing AI Call Summary (this is the column we update)[m
+[32m+[m[32m    existing_ai_call_summary = customer.get('ai_call_summary', '')[m
+[32m+[m[41m    [m
+[32m+[m[32m    # Append call notes entry to existing AI Call Summary (separate each call with separator)[m
+[32m+[m[32m    if existing_ai_call_summary:[m
+[32m+[m[32m        new_ai_call_summary = existing_ai_call_summary + "\n---\n" + call_notes_entry[m
+[32m+[m[32m    else:[m
+[32m+[m[32m        new_ai_call_summary = call_notes_entry[m
+[32m+[m
+     # Update fields[m
+     updates = {[m
+         'ai_call_stage': new_stage,[m
+[31m-        'ai_call_summary': new_summary,[m
+[31m-        'ai_call_eval': new_eval,[m
+[32m+[m[32m        'ai_call_summary': new_ai_call_summary,  # Update with formatted call notes (same format as N1 project Call Notes)[m
+[32m+[m[32m        'ai_call_eval': new_eval,  # Keep old format for eval[m
+         # 'done?': mark_done  # Commented out - wait for manual verification[m
+     }[m
+ [m
+[36m@@ -394,7 +519,7 @@[m [mdef update_after_call(smartsheet_service, customer, call_data, current_stage):[m
+     if success:[m
+         print(f"✅ Smartsheet updated successfully")[m
+         print(f"   • Stage: {current_stage} → {new_stage}")[m
+[31m-        # print(f"   • Done: {mark_done}")  # Commented out - wait for manual verification[m
+[32m+[m[32m        print(f"   • AI Call Summary: Updated with formatted call notes (Call #{call_number})")[m
+         if next_followup_date:[m
+             print(f"   • Next F/U Date: {next_followup_date}")[m
+     else:[m

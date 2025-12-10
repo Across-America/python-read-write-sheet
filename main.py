@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 AAIS Automated Workflow System - Main Entry Point
-Designed to run as a cron job at PST 4:00 PM daily
+Designed to run as a cron job at PST 11:00 AM daily
 Supports multiple workflow types: cancellations, billing notifications, etc.
 """
 
@@ -55,7 +55,7 @@ def main():
     """Main entry point for cron job"""
     logger = setup_logging()
 
-    # Check if it's 4:00 PM Pacific time (handles DST automatically)
+    # Check if it's 11:00 AM Pacific time (handles DST automatically)
     pacific_tz = ZoneInfo("America/Los_Angeles")
     now_pacific = datetime.now(pacific_tz)
 
@@ -74,11 +74,11 @@ def main():
     if is_manual_trigger:
         logger.info("🖱️  Manual trigger detected (workflow_dispatch) - skipping time check")
     else:
-        # Only run if it's 4:00 PM hour (16:00) in Pacific time
-        target_hour = 16  # 4:00 PM
+        # Only run if it's 11:00 AM hour (11:00) in Pacific time
+        target_hour = 11  # 11:00 AM
 
         if now_pacific.hour != target_hour:
-            logger.info(f"⏭️  Skipping: Current Pacific time is {now_pacific.strftime('%I:%M %p')}, not 4:00 PM")
+            logger.info(f"⏭️  Skipping: Current Pacific time is {now_pacific.strftime('%I:%M %p')}, not 11:00 AM")
             logger.info(f"   This is expected due to daylight saving time handling")
             logger.info("=" * 80)
             return 0
