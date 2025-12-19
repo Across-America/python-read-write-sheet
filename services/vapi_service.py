@@ -674,46 +674,71 @@ class VAPIService:
                 print(f"  {key}: {value}")
         print("-" * 80)
         
-        # 特别显示 renewal date 和 renewal amount
-        print(f"\n💰 Renewal 信息:")
-        print("-" * 80)
-        renewal_payment_var = assistant_overrides.get("variableValues", {}).get("renewal payment") or assistant_overrides.get("variableValues", {}).get("renewal_payment", "")
-        expiration_date_var = assistant_overrides.get("variableValues", {}).get("Expiration Date") or assistant_overrides.get("variableValues", {}).get("expiration_date", "")
-        print(f"  Renewal Date: {expiration_date_var if expiration_date_var else '(空)'}")
-        print(f"  Renewal Amount: {renewal_payment_var if renewal_payment_var else '(空)'}")
-        print("-" * 80)
+        # 调试：显示 First Message 中使用的关键变量
+        # 检查是否是STM1 workflow（通过检查是否有STM1特有的变量）
+        variable_values = assistant_overrides.get("variableValues", {})
+        is_stm1_workflow = "INSURED_DRIVER_STATEMENT_CLAIM_NUMBER_COLUMN_ID" in variable_values
         
-        # 调试：显示 First Message 中使用的关键变量（下划线版本）
-        print(f"\n🔍 First Message 关键变量检查 (下划线格式):")
-        print("-" * 80)
-        first_message_vars_underscore = {
-            "First_Name": assistant_overrides.get("variableValues", {}).get("First_Name", ""),
-            "Last_Name": assistant_overrides.get("variableValues", {}).get("Last_Name", ""),
-            "LOB": assistant_overrides.get("variableValues", {}).get("LOB", ""),
-            "Company": assistant_overrides.get("variableValues", {}).get("Company", ""),
-            "Expiration_Date": assistant_overrides.get("variableValues", {}).get("Expiration_Date", ""),
-            "renewal_payment": renewal_payment_var
-        }
-        for var_name, var_value in first_message_vars_underscore.items():
-            status = "✅" if var_value else "❌"
-            print(f"  {status} {{{{ {var_name} }}}}: {var_value if var_value else '(空 - 可能导致替换失败)'}")
-        print("-" * 80)
+        # 特别显示 renewal date 和 renewal amount（仅对Renewal workflow）
+        if not is_stm1_workflow:
+            print(f"\n💰 Renewal 信息:")
+            print("-" * 80)
+            renewal_payment_var = variable_values.get("renewal payment") or variable_values.get("renewal_payment", "")
+            expiration_date_var = variable_values.get("Expiration Date") or variable_values.get("expiration_date", "")
+            print(f"  Renewal Date: {expiration_date_var if expiration_date_var else '(空)'}")
+            print(f"  Renewal Amount: {renewal_payment_var if renewal_payment_var else '(空)'}")
+            print("-" * 80)
         
-        # 也显示空格版本（向后兼容）
-        print(f"\n🔍 First Message 关键变量检查 (空格格式 - 向后兼容):")
-        print("-" * 80)
-        first_message_vars_space = {
-            "First Name": assistant_overrides.get("variableValues", {}).get("First Name", ""),
-            "Last Name": assistant_overrides.get("variableValues", {}).get("Last Name", ""),
-            "LOB": assistant_overrides.get("variableValues", {}).get("LOB", ""),
-            "Company": assistant_overrides.get("variableValues", {}).get("Company", ""),
-            "Expiration Date": expiration_date_var,
-            "renewal payment": renewal_payment_var
-        }
-        for var_name, var_value in first_message_vars_space.items():
-            status = "✅" if var_value else "❌"
-            print(f"  {status} {{{{ {var_name} }}}}: {var_value if var_value else '(空 - 可能导致替换失败)'}")
-        print("-" * 80)
+        if is_stm1_workflow:
+            # STM1 workflow - 检查STM1特有的变量
+            print(f"\n🔍 First Message 关键变量检查 (STM1):")
+            print("-" * 80)
+            stm1_vars = {
+                "INSURED_DRIVER_STATEMENT_CLAIM_NUMBER_COLUMN_ID": variable_values.get("INSURED_DRIVER_STATEMENT_CLAIM_NUMBER_COLUMN_ID", ""),
+                "INSURED_DRIVER_STATEMENT_INSURED_DRIVER_NAME_COLUMN_ID": variable_values.get("INSURED_DRIVER_STATEMENT_INSURED_DRIVER_NAME_COLUMN_ID", ""),
+                "INSURED_DRIVER_STATEMENT_INSURED_NAME_COLUMN_ID": variable_values.get("INSURED_DRIVER_STATEMENT_INSURED_NAME_COLUMN_ID", ""),
+                "INSURED_DRIVER_STATEMENT_DATE_OF_LOSS_COLUMN_ID": variable_values.get("INSURED_DRIVER_STATEMENT_DATE_OF_LOSS_COLUMN_ID", ""),
+                "INSURED_DRIVER_STATEMENT_LANGUAGE_COLUMN_ID": variable_values.get("INSURED_DRIVER_STATEMENT_LANGUAGE_COLUMN_ID", ""),
+            }
+            for var_name, var_value in stm1_vars.items():
+                status = "✅" if var_value else "❌"
+                print(f"  {status} {{{{ {var_name} }}}}: {var_value if var_value else '(空 - 可能导致替换失败)'}")
+            print("-" * 80)
+        else:
+            # Renewal/Non-Renewal workflow - 检查Renewal特有的变量
+            renewal_payment_var = variable_values.get("renewal payment") or variable_values.get("renewal_payment", "")
+            expiration_date_var = variable_values.get("Expiration Date") or variable_values.get("expiration_date", "")
+            
+            print(f"\n🔍 First Message 关键变量检查 (下划线格式):")
+            print("-" * 80)
+            first_message_vars_underscore = {
+                "First_Name": variable_values.get("First_Name", ""),
+                "Last_Name": variable_values.get("Last_Name", ""),
+                "LOB": variable_values.get("LOB", ""),
+                "Company": variable_values.get("Company", ""),
+                "Expiration_Date": variable_values.get("Expiration_Date", ""),
+                "renewal_payment": renewal_payment_var
+            }
+            for var_name, var_value in first_message_vars_underscore.items():
+                status = "✅" if var_value else "❌"
+                print(f"  {status} {{{{ {var_name} }}}}: {var_value if var_value else '(空 - 可能导致替换失败)'}")
+            print("-" * 80)
+            
+            # 也显示空格版本（向后兼容）
+            print(f"\n🔍 First Message 关键变量检查 (空格格式 - 向后兼容):")
+            print("-" * 80)
+            first_message_vars_space = {
+                "First Name": variable_values.get("First Name", ""),
+                "Last Name": variable_values.get("Last Name", ""),
+                "LOB": variable_values.get("LOB", ""),
+                "Company": variable_values.get("Company", ""),
+                "Expiration Date": expiration_date_var,
+                "renewal payment": renewal_payment_var
+            }
+            for var_name, var_value in first_message_vars_space.items():
+                status = "✅" if var_value else "❌"
+                print(f"  {status} {{{{ {var_name} }}}}: {var_value if var_value else '(空 - 可能导致替换失败)'}")
+            print("-" * 80)
         
         # 调试：显示完整的 payload（仅变量部分）
         import json

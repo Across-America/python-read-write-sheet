@@ -1,18 +1,19 @@
-name: Daily STM1 Workflow
+name: Daily STM1 Automated Calling
 
 on:
   schedule:
     # Run at both UTC 16:00 and UTC 17:00 to handle daylight saving time automatically
-    # Python code will check if it's 9:00 AM Pacific time and skip if not
-    # STM1 calling hours: 9:00 AM - 5:00 PM Pacific Time
-    # Workflow runs at 9:00 AM to start daily calling within the allowed time window
+    # Python code will check if it's 9:00 AM Pacific time and start calling
+    # STM1 calling hours: 9:00 AM - 4:50 PM Pacific Time
+    # Workflow runs at 9:00 AM to start automated calling for rows with empty called_times
     - cron: "0 16 * * *"  # 9:00 AM PDT (daylight saving time)
     - cron: "0 17 * * *"   # 9:00 AM PST (standard time)
   workflow_dispatch:  # Allow manual trigger from GitHub Actions UI
 
 jobs:
-  run-stm1-workflow:
+  run-stm1-automated-calling:
     runs-on: ubuntu-latest
+    timeout-minutes: 480  # 8 hours timeout (9 AM to 5 PM)
 
     steps:
       - name: Checkout code
@@ -27,10 +28,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run STM1 workflow
+      - name: Run Automated STM1 Calling
         env:
           SMARTSHEET_ACCESS_TOKEN: ${{ secrets.SMARTSHEET_ACCESS_TOKEN }}
           VAPI_API_KEY: ${{ secrets.VAPI_API_KEY }}
-          WORKFLOW_TYPE: stm1
-        run: python main.py
+        run: python scripts/auto_stm1_calling.py
 
