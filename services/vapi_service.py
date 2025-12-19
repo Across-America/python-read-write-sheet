@@ -181,10 +181,11 @@ def expand_lob_abbreviation(lob_abbrev):
 class VAPIService:
     """Service for interacting with VAPI API"""
 
-    def __init__(self, assistant_id=None):
+    def __init__(self, assistant_id=None, phone_number_id=None):
         self.api_key = VAPI_API_KEY
         self.assistant_id = assistant_id
-        self.phone_number_id = COMPANY_PHONE_NUMBER_ID
+        # Use provided phone_number_id, or fall back to default company number
+        self.phone_number_id = phone_number_id or COMPANY_PHONE_NUMBER_ID
         self.base_url = "https://api.vapi.ai"
     
     def make_batch_call(self, customers, schedule_immediately=True):
@@ -209,10 +210,15 @@ class VAPIService:
         for customer in customers:
             formatted_phone = format_phone_number(customer['phone_number'])
             
+            # Get customer name and truncate to 40 characters (VAPI API requirement)
+            customer_name = customer.get('insured', 'Customer')
+            if len(customer_name) > 40:
+                customer_name = customer_name[:37] + "..."  # Truncate to 37 chars + "..." = 40 total
+            
             # Create customer context for VAPI
             customer_context = {
                 "number": formatted_phone,
-                "name": customer.get('insured', 'Customer')
+                "name": customer_name
             }
             
             # Create context for assistant overrides
@@ -534,7 +540,7 @@ class VAPIService:
             print(transcript)
             print("-" * 40)
 
-    def make_batch_call_with_assistant(self, customers, assistant_id, schedule_immediately=True, schedule_at=None, max_retries=3):
+    def make_batch_call_with_assistant(self, customers, assistant_id, schedule_immediately=True, schedule_at=None, max_retries=3, custom_variable_builder=None):
         """
         Make batch VAPI call with a specific assistant ID
 
@@ -543,6 +549,9 @@ class VAPIService:
             assistant_id (str): Specific assistant ID to use for this batch
             schedule_immediately (bool): If True, call immediately (default: True)
             schedule_at (datetime): Specific datetime to schedule the call (overrides schedule_immediately)
+            custom_variable_builder (callable): Optional function to build custom variable values.
+                                               Function signature: (customer) -> dict
+                                               If provided, uses this instead of default renewal workflow variables
 
         Returns:
             list: List of call result dicts or None if failed
@@ -557,59 +566,77 @@ class VAPIService:
         # Prepare assistant overrides with customer-specific variables
         # Use first customer's data for variable values (for batch calls)
         first_customer = customers[0] if customers else {}
-
-        # Get offered_premium and format it for speech if available
-        # For renewal workflow, amount_due and renewal_payment should use the same value (offered_premium)
-        offered_premium = first_customer.get('offered_premium', '') or first_customer.get('Offered Premium', '')
         
-        # Use offered_premium for amount_due if available, otherwise fall back to amount_due field
-        amount_due_value = offered_premium if offered_premium else first_customer.get('amount_due', '0')
-        
-        # Format amounts for speech
-        amount_due_formatted = format_amount_for_speech(amount_due_value)
-        renewal_payment = amount_due_formatted  # Same value as amount_due
-        
-        # Get expiration date and format it for speech
-        expiration_date_str = first_customer.get('expiration_date', '') or first_customer.get('expiration date', '')
-        expiration_date_formatted = format_date_for_speech(expiration_date_str) if expiration_date_str else ''
-        
-        assistant_overrides = {
-            "variableValues": {
-                "company": first_customer.get('company', 'Customer'),
-                "Company": first_customer.get('company', 'Customer'),  # Support both lowercase and capitalized
-                "amount_due": amount_due_formatted,  # Use offered_premium if available
-                "cancellation_date": format_date_for_speech(first_customer.get('cancellation_date', '')),
-                "phone_number": first_customer.get('phone_number', ''),
-                "policy_number": first_customer.get('policy_number', ''),
-                "client_id": first_customer.get('client_id', ''),
-                "renewal_payment": renewal_payment,  # Same as amount_due (both use offered_premium)
-                # Variables for first message - using underscore format (matching VAPI Assistant after user's update)
-                "First_Name": first_customer.get('first_name', '') or first_customer.get('First Name', ''),
-                "first_name": first_customer.get('first_name', '') or first_customer.get('First Name', ''),
-                "Last_Name": first_customer.get('last_name', '') or first_customer.get('Last Name', ''),
-                "last_name": first_customer.get('last_name', '') or first_customer.get('Last Name', ''),
-                # Expand LOB abbreviation to full form for speech (e.g., "MHOME" -> "Mobile home")
-                "LOB": expand_lob_abbreviation(first_customer.get('lob', '') or first_customer.get('LOB', '')),
-                "lob": expand_lob_abbreviation(first_customer.get('lob', '') or first_customer.get('LOB', '')),
-                "Company": first_customer.get('company', 'Customer'),
-                "company": first_customer.get('company', 'Customer'),
-                "Expiration_Date": expiration_date_formatted,
-                "expiration_date": expiration_date_formatted,
-                # Also keep space versions for backward compatibility (in case assistant still uses them)
-                "First Name": first_customer.get('first_name', '') or first_customer.get('First Name', ''),
-                "Last Name": first_customer.get('last_name', '') or first_customer.get('Last Name', ''),
-                "Expiration Date": expiration_date_formatted,
-                "renewal payment": renewal_payment
+        # Use custom variable builder if provided, otherwise use default renewal workflow variables
+        if custom_variable_builder:
+            variable_values = custom_variable_builder(first_customer)
+            assistant_overrides = {
+                "variableValues": variable_values
             }
-        }
+        else:
+            # Default renewal workflow variable building
+            # Get offered_premium and format it for speech if available
+            # For renewal workflow, amount_due and renewal_payment should use the same value (offered_premium)
+            offered_premium = first_customer.get('offered_premium', '') or first_customer.get('Offered Premium', '')
+            
+            # Use offered_premium for amount_due if available, otherwise fall back to amount_due field
+            amount_due_value = offered_premium if offered_premium else first_customer.get('amount_due', '0')
+            
+            # Format amounts for speech
+            amount_due_formatted = format_amount_for_speech(amount_due_value)
+            renewal_payment = amount_due_formatted  # Same value as amount_due
+            
+            # Get expiration date and format it for speech
+            expiration_date_str = first_customer.get('expiration_date', '') or first_customer.get('expiration date', '')
+            expiration_date_formatted = format_date_for_speech(expiration_date_str) if expiration_date_str else ''
+            
+            assistant_overrides = {
+                "variableValues": {
+                    "company": first_customer.get('company', 'Customer'),
+                    "Company": first_customer.get('company', 'Customer'),  # Support both lowercase and capitalized
+                    "amount_due": amount_due_formatted,  # Use offered_premium if available
+                    "cancellation_date": format_date_for_speech(first_customer.get('cancellation_date', '')),
+                    "phone_number": first_customer.get('phone_number', ''),
+                    "policy_number": first_customer.get('policy_number', ''),
+                    "client_id": first_customer.get('client_id', ''),
+                    "renewal_payment": renewal_payment,  # Same as amount_due (both use offered_premium)
+                    # Variables for first message - using underscore format (matching VAPI Assistant after user's update)
+                    "First_Name": first_customer.get('first_name', '') or first_customer.get('First Name', ''),
+                    "first_name": first_customer.get('first_name', '') or first_customer.get('First Name', ''),
+                    "Last_Name": first_customer.get('last_name', '') or first_customer.get('Last Name', ''),
+                    "last_name": first_customer.get('last_name', '') or first_customer.get('Last Name', ''),
+                    # Expand LOB abbreviation to full form for speech (e.g., "MHOME" -> "Mobile home")
+                    "LOB": expand_lob_abbreviation(first_customer.get('lob', '') or first_customer.get('LOB', '')),
+                    "lob": expand_lob_abbreviation(first_customer.get('lob', '') or first_customer.get('LOB', '')),
+                    "Company": first_customer.get('company', 'Customer'),
+                    "company": first_customer.get('company', 'Customer'),
+                    "Expiration_Date": expiration_date_formatted,
+                    "expiration_date": expiration_date_formatted,
+                    # Also keep space versions for backward compatibility (in case assistant still uses them)
+                    "First Name": first_customer.get('first_name', '') or first_customer.get('First Name', ''),
+                    "Last Name": first_customer.get('last_name', '') or first_customer.get('Last Name', ''),
+                    "Expiration Date": expiration_date_formatted,
+                    "renewal payment": renewal_payment
+                }
+            }
 
         for customer in customers:
-            formatted_phone = format_phone_number(customer['phone_number'])
+            # Support multiple phone field names (phone_number, contact_phone, etc.)
+            phone = customer.get('phone_number') or customer.get('contact_phone') or customer.get('client_phone_number', '')
+            if not phone:
+                print(f"⚠️  Warning: Customer {customer.get('company', customer.get('insured_name', 'Unknown'))} has no phone number, skipping")
+                continue
+            formatted_phone = format_phone_number(phone)
 
+            # Get customer name and truncate to 40 characters (VAPI API requirement)
+            customer_name = customer.get('company', customer.get('insured_name', customer.get('insured', 'Customer')))
+            if len(customer_name) > 40:
+                customer_name = customer_name[:37] + "..."  # Truncate to 37 chars + "..." = 40 total
+            
             # Create customer context for VAPI
             customer_context = {
                 "number": formatted_phone,
-                "name": customer.get('company', customer.get('insured', 'Customer'))
+                "name": customer_name
             }
 
             vapi_customers.append(customer_context)

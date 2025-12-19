@@ -107,21 +107,25 @@ NON_RENEWAL_CALLING_SCHEDULE = [14, 7, 1]  # Days before expiration date to call
 # STM1 Project Configuration
 # Statement Call Workflow - All American Claims workspace
 # ========================================
-# STM1 Assistant IDs - TO BE CONFIGURED
-STM1_1ST_REMINDER_ASSISTANT_ID = None  # TODO: Configure when assistant IDs are decided
-STM1_2ND_REMINDER_ASSISTANT_ID = None  # TODO: Configure when assistant IDs are decided
-STM1_3RD_REMINDER_ASSISTANT_ID = None  # TODO: Configure when assistant IDs are decided
+# STM1 Assistant ID (single assistant for daily condition-based calling)
+STM1_ASSISTANT_ID = "e9ec024e-5b90-4da2-8550-07917463978f"  # STM1 Assistant for daily calls
 
 # STM1 Sheet Configuration
-# Location: All American Claims workspace -> statements call sheet
-STM1_SHEET_ID = 3766712882122628  # "statements call" sheet ID
-STM1_WORKSPACE_NAME = "All American Claims"
-STM1_SHEET_NAME = "statements call"
+# Location: AACS workspace -> Insured Driver Statement sheet
+STM1_SHEET_ID = 7093255935053700  # "Insured Driver Statement" sheet ID
+STM1_WORKSPACE_NAME = "AACS"
+STM1_SHEET_NAME = "Insured Driver Statement"
 
-# STM1 Timeline Configuration - TO BE CONFIGURED
-# Contact schedule: To be determined based on STM1 requirements
-STM1_CALLING_SCHEDULE = None  # TODO: Configure when workflow schedule is decided (e.g., [14, 7, 1])
-STM1_CALLING_START_DAY = None  # TODO: Configure when start day is decided (e.g., 1)
+# STM1 Phone Number Configuration
+# STM1 uses a dedicated phone number for caller ID display
+STM1_PHONE_NUMBER_ID = "5b2df9f4-780d-4ef6-9e01-0e55b1ba5d82"  # STM1 dedicated phone number
+
+# STM1 Configuration
+# Note: STM1 uses daily condition-based calling (not multi-stage schedule)
+# Calls are made daily based on conditions, not on a fixed schedule
+STM1_MAX_DAILY_CALLS = 500  # Maximum number of calls per day for STM1 project
+STM1_CALLING_START_HOUR = 9  # Start calling at 9:00 AM Pacific Time
+STM1_CALLING_END_HOUR = 17  # End calling at 5:00 PM (17:00) Pacific Time
 
 # ========================================
 # Call Monitoring Configuration

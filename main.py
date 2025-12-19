@@ -16,6 +16,7 @@ from workflows.renewals import run_renewal_batch_calling
 from workflows.non_renewals import run_non_renewals_calling
 from workflows.direct_bill import run_direct_bill_batch_calling
 from workflows.mortgage_bill import run_mortgage_bill_calling
+from workflows.stm1 import run_stm1_batch_calling
 
 
 # Setup logging
@@ -71,14 +72,33 @@ def main():
     import os
     is_manual_trigger = os.getenv('GITHUB_EVENT_NAME') == 'workflow_dispatch'
 
+    # Determine which workflow to run based on environment variable
+    import os
+    workflow_type = os.getenv('WORKFLOW_TYPE', 'cancellations')
+    
     if is_manual_trigger:
         logger.info("🖱️  Manual trigger detected (workflow_dispatch) - skipping time check")
     else:
-        # Only run if it's 11:00 AM hour (11:00) in Pacific time
-        target_hour = 11  # 11:00 AM
+        # Determine target hour based on workflow type
+        # CL1 (Cancellations): 11:00 AM
+        # N1 (Renewals, Non-Renewals): 4:00 PM
+        # STM1: 9:00 AM (calling hours: 9:00 AM - 5:00 PM)
+        if workflow_type == 'cancellations':
+            target_hour = 11  # 11:00 AM
+            target_time_str = "11:00 AM"
+        elif workflow_type == 'stm1':
+            target_hour = 9  # 9:00 AM (STM1 calling hours: 9:00 AM - 5:00 PM)
+            target_time_str = "9:00 AM"
+        elif workflow_type in ['renewals', 'non_renewals']:
+            target_hour = 16  # 4:00 PM
+            target_time_str = "4:00 PM"
+        else:
+            # Default to 11:00 AM for other workflows
+            target_hour = 11
+            target_time_str = "11:00 AM"
 
         if now_pacific.hour != target_hour:
-            logger.info(f"⏭️  Skipping: Current Pacific time is {now_pacific.strftime('%I:%M %p')}, not 11:00 AM")
+            logger.info(f"⏭️  Skipping: Current Pacific time is {now_pacific.strftime('%I:%M %p')}, not {target_time_str}")
             logger.info(f"   This is expected due to daylight saving time handling")
             logger.info("=" * 80)
             return 0
@@ -91,9 +111,6 @@ def main():
             return 0
 
     try:
-        # Determine which workflow to run based on environment variable
-        import os
-        workflow_type = os.getenv('WORKFLOW_TYPE', 'cancellations')
         
         if workflow_type == 'cancellations':
             logger.info("🔄 Running CL1 Project - Cancellation Workflow")
@@ -144,9 +161,17 @@ def main():
                 schedule_at=None,     # Call immediately
                 auto_confirm=True     # Skip confirmation (cron mode)
             )
+        elif workflow_type == 'stm1':
+            logger.info("🔄 Running STM1 Project - Statement Call Workflow")
+            # Run the STM1 batch calling workflow (Statement Call)
+            success = run_stm1_batch_calling(
+                test_mode=False,      # Production mode
+                schedule_at=None,     # Call immediately
+                auto_confirm=True     # Skip confirmation (cron mode)
+            )
         else:
             logger.error(f"❌ Unknown workflow type: {workflow_type}")
-            logger.error("   Supported types: 'cancellations', 'renewals', 'non_renewals', 'direct_bill', 'mortgage_bill'")
+            logger.error("   Supported types: 'cancellations', 'renewals', 'non_renewals', 'direct_bill', 'mortgage_bill', 'stm1'")
             return 1
 
         if success:

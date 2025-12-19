@@ -1,0 +1,36 @@
+name: Daily STM1 Workflow
+
+on:
+  schedule:
+    # Run at both UTC 16:00 and UTC 17:00 to handle daylight saving time automatically
+    # Python code will check if it's 9:00 AM Pacific time and skip if not
+    # STM1 calling hours: 9:00 AM - 5:00 PM Pacific Time
+    # Workflow runs at 9:00 AM to start daily calling within the allowed time window
+    - cron: "0 16 * * *"  # 9:00 AM PDT (daylight saving time)
+    - cron: "0 17 * * *"   # 9:00 AM PST (standard time)
+  workflow_dispatch:  # Allow manual trigger from GitHub Actions UI
+
+jobs:
+  run-stm1-workflow:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run STM1 workflow
+        env:
+          SMARTSHEET_ACCESS_TOKEN: ${{ secrets.SMARTSHEET_ACCESS_TOKEN }}
+          VAPI_API_KEY: ${{ secrets.VAPI_API_KEY }}
+          WORKFLOW_TYPE: stm1
+        run: python main.py
+

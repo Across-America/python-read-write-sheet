@@ -531,6 +531,74 @@ def get_renewal_customers_ready_for_calls(smartsheet_service):
     return customers_by_stage
 
 
+def get_renewal_expired_after_customers(smartsheet_service):
+    """
+    Get all renewal customers that are expired after (Expiration Date过了一天之后)
+    
+    Args:
+        smartsheet_service: SmartsheetService 实例
+    
+    Returns:
+        list: 过期后的客户列表
+    """
+    print("=" * 80)
+    print("🔍 FETCHING RENEWAL CUSTOMERS EXPIRED AFTER (Expiration Date过了一天之后)")
+    print("=" * 80)
+    print("📋 筛选条件: 今天 > Expiration Date + 1天")
+    print("=" * 80)
+    
+    # 获取所有客户
+    all_customers = smartsheet_service.get_all_customers_with_stages()
+    
+    # 使用太平洋时区获取今天的日期
+    pacific_tz = ZoneInfo("America/Los_Angeles")
+    today = datetime.now(pacific_tz).date()
+    print(f"📅 Today (Pacific Time): {today}")
+    
+    expired_customers = []
+    skipped_count = 0
+    
+    for customer in all_customers:
+        row_num = customer.get('row_number', 'N/A')
+        
+        # 初始验证
+        should_skip, skip_reason = should_skip_renewal_row(customer)
+        if should_skip:
+            skipped_count += 1
+            continue
+        
+        # 获取当前 stage（可选：可以跳过已完成所有电话的客户）
+        # 对于过期后保单，我们仍然可以拨打，所以不跳过 stage >= 4 的客户
+        
+        # 获取 expiration_date
+        expiration_date_str = customer.get('expiration_date', '') or customer.get('expiration date', '')
+        if not expiration_date_str.strip():
+            skipped_count += 1
+            continue
+        
+        expiration_date = parse_date(expiration_date_str)
+        if not expiration_date:
+            skipped_count += 1
+            continue
+        
+        # 检查是否过期后（今天 > Expiration Date + 1天）
+        expiration_plus_one = expiration_date + timedelta(days=1)
+        if today <= expiration_plus_one:
+            skipped_count += 1
+            continue
+        
+        # 添加到过期后客户列表
+        expired_customers.append(customer)
+        days_expired = (today - expiration_date).days
+        print(f"   ✅ Row {row_num}: 过期后保单 (Expiration Date {expiration_date}, 已过期 {days_expired} 天), 准备拨打")
+    
+    print(f"\n📊 Summary:")
+    print(f"   过期后保单: {len(expired_customers)} 个客户")
+    print(f"   跳过: {skipped_count} 行")
+    
+    return expired_customers
+
+
 def format_renewal_call_entry(summary, evaluation, call_number):
     """Format a renewal call entry for appending"""
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -874,7 +942,13 @@ def run_renewal_batch_calling(test_mode=False, schedule_at=None, auto_confirm=Fa
     # Get customers grouped by stage
     customers_by_stage = get_renewal_customers_ready_for_calls(smartsheet_service)
     
-    total_customers = sum(len(v) for v in customers_by_stage.values())
+    # Get expired after customers (Expiration Date过了一天之后)
+    EXPIRED_AFTER_ASSISTANT_ID = "aec4721c-360c-45b5-ba39-87320eab6fc9"
+    expired_after_customers = get_renewal_expired_after_customers(smartsheet_service)
+    
+    total_non_expired = sum(len(v) for v in customers_by_stage.values())
+    total_expired_after = len(expired_after_customers)
+    total_customers = total_non_expired + total_expired_after
     
     if total_customers == 0:
         print("\n✅ No renewal customers ready for calls today")
@@ -900,12 +974,29 @@ def run_renewal_batch_calling(test_mode=False, schedule_at=None, auto_confirm=Fa
             if len(customers) > 5:
                 print(f"   ... and {len(customers) - 5} more")
     
+    # Show expired after customers
+    if expired_after_customers:
+        print(f"\n🔔 过期后保单 (Expired After) - {len(expired_after_customers)} customers:")
+        print(f"   🤖 Assistant ID: {EXPIRED_AFTER_ASSISTANT_ID}")
+        
+        for i, customer in enumerate(expired_after_customers[:5], 1):
+            phone = customer.get('phone_number') or customer.get('client_phone_number', 'N/A')
+            expiration_date = customer.get('expiration_date', '') or customer.get('expiration date', 'N/A')
+            print(f"   {i}. {customer.get('company', 'Unknown')} - {phone} (Expiration: {expiration_date})")
+        
+        if len(expired_after_customers) > 5:
+            print(f"   ... and {len(expired_after_customers) - 5} more")
+    
     print(f"\n{'=' * 80}")
     if not test_mode:
         print(f"⚠️  WARNING: This will make {total_customers} renewal phone calls!")
+        print(f"   • 未过期保单: {total_non_expired} 通")
+        print(f"   • 过期后保单: {total_expired_after} 通")
         print(f"💰 This will incur charges for each call")
     else:
         print(f"🧪 TEST MODE: Will simulate {total_customers} renewal calls (no charges)")
+        print(f"   • 未过期保单: {total_non_expired} 通")
+        print(f"   • 过期后保单: {total_expired_after} 通")
     print(f"{'=' * 80}")
 
     # Only ask for confirmation if not auto_confirm and not test_mode
@@ -1104,6 +1195,102 @@ def run_renewal_batch_calling(test_mode=False, schedule_at=None, auto_confirm=Fa
 
                 print(f"\n✅ Stage {stage} renewal sequential calls completed")
     
+    # Process expired after customers
+    if expired_after_customers:
+        print(f"\n{'=' * 80}")
+        print(f"📞 RENEWAL CALLING - 过期后保单 (Expired After) - {len(expired_after_customers)} customers")
+        print(f"🤖 Using Assistant: {EXPIRED_AFTER_ASSISTANT_ID}")
+        print(f"{'=' * 80}")
+        print(f"📦 Batch calling mode (simultaneous)")
+        
+        if test_mode:
+            # Test mode: Simulate calls without actual API calls
+            print(f"\n🧪 TEST MODE: Simulating {len(expired_after_customers)} expired after calls...")
+            for customer in expired_after_customers:
+                phone = customer.get('phone_number') or customer.get('client_phone_number', 'N/A')
+                print(f"   ✅ [SIMULATED] Would call: {customer.get('company', 'Unknown')} - {phone}")
+                total_success += 1
+        else:
+            # Validate customers before calling
+            validated_customers = []
+            for customer in expired_after_customers:
+                is_valid, error_msg, validated_data = validate_renewal_customer_data(customer)
+                if is_valid:
+                    # Merge validated data into customer (especially phone_number)
+                    customer_for_call = {**customer, **validated_data}
+                    validated_customers.append(customer_for_call)
+                else:
+                    error_logger.log_validation_failure(customer, error_msg)
+                    error_logger.log_warning(customer, -1, 'VALIDATION_FAILED', error_msg)
+                    total_failed += 1
+            
+            if not validated_customers:
+                print(f"\n⚠️  No valid customers for expired after calls after validation")
+            else:
+                try:
+                    results = vapi_service.make_batch_call_with_assistant(
+                        validated_customers,
+                        EXPIRED_AFTER_ASSISTANT_ID,
+                        schedule_immediately=(schedule_at is None),
+                        schedule_at=schedule_at
+                    )
+
+                    if results:
+                        print(f"\n✅ Expired after renewal batch calls completed")
+                        print(f"   📊 Received {len(results)} call result(s) for {len(validated_customers)} customer(s)")
+
+                        # Only update Smartsheet if calls were immediate (not scheduled)
+                        if schedule_at is None:
+                            for i, customer in enumerate(validated_customers):
+                                # Get corresponding call_data
+                                if i < len(results):
+                                    call_data = results[i]
+                                else:
+                                    call_data = results[0] if results else None
+                                
+                                if call_data:
+                                    # Check if analysis exists, try to refresh if missing
+                                    if 'analysis' not in call_data or not call_data.get('analysis'):
+                                        print(f"   ⚠️  Customer {i+1} ({customer.get('company', 'Unknown')}): No analysis in call_data")
+                                        if 'id' in call_data:
+                                            call_id = call_data['id']
+                                            try:
+                                                refreshed_data = vapi_service.check_call_status(call_id)
+                                                if refreshed_data and refreshed_data.get('analysis'):
+                                                    call_data = refreshed_data
+                                                    print(f"      ✅ Successfully retrieved analysis from refreshed call status")
+                                            except Exception as e:
+                                                print(f"      ❌ Failed to refresh call status: {e}")
+                                    
+                                    # Update Smartsheet
+                                    try:
+                                        # For expired after customers, use current stage (don't increment)
+                                        current_stage = get_renewal_stage(customer)
+                                        success = update_after_renewal_call(smartsheet_service, customer, call_data, current_stage)
+                                        if success:
+                                            total_success += 1
+                                        else:
+                                            error_logger.log_error(customer, -1, 'SMARTSHEET_UPDATE_FAILED', "Failed to update Smartsheet after expired after call")
+                                            total_failed += 1
+                                    except Exception as e:
+                                        error_logger.log_error(customer, -1, 'SMARTSHEET_UPDATE_ERROR', f"Exception during Smartsheet update: {e}", e)
+                                        total_failed += 1
+                                else:
+                                    print(f"   ❌ No call data for customer {i+1} ({customer.get('company', 'Unknown')})")
+                                    error_logger.log_error(customer, -1, 'VAPI_CALL_FAILED', "VAPI call returned no data")
+                                    total_failed += 1
+                        else:
+                            print(f"   ⏰ Calls scheduled - Smartsheet will be updated after calls complete")
+                            total_success += len(validated_customers)
+                    else:
+                        print(f"\n❌ Expired after renewal batch calls failed")
+                        error_logger.log_error({}, -1, 'VAPI_BATCH_CALL_FAILED', "VAPI batch call returned no results")
+                        total_failed += len(validated_customers)
+                except Exception as e:
+                    print(f"\n❌ Expired after renewal batch calls failed with exception")
+                    error_logger.log_error({}, -1, 'VAPI_BATCH_CALL_EXCEPTION', f"Exception during VAPI batch call: {e}", e)
+                    total_failed += len(validated_customers)
+    
     # Final summary
     print(f"\n{'=' * 80}")
     print(f"🏁 RENEWAL BATCH CALLING COMPLETE")
@@ -1111,6 +1298,8 @@ def run_renewal_batch_calling(test_mode=False, schedule_at=None, auto_confirm=Fa
     print(f"   ✅ Successful: {total_success}")
     print(f"   ❌ Failed: {total_failed}")
     print(f"   📊 Total: {total_success + total_failed}")
+    print(f"   • 未过期保单: {total_non_expired}")
+    print(f"   • 过期后保单: {total_expired_after}")
     print(f"{'=' * 80}")
     
     # Print error summary
