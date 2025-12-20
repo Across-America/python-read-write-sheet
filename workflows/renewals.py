@@ -20,7 +20,9 @@ from config import (
     RENEWAL_PLR_SHEET_ID,
     RENEWAL_PLR_SHEET_NAME_PATTERN,
     RENEWAL_CALLING_SCHEDULE,
-    RENEWAL_CALLING_START_DAY
+    RENEWAL_CALLING_START_DAY,
+    MORTGAGE_BILL_1ST_REMAINDER_ASSISTANT_ID,
+    MORTGAGE_BILL_2ND_REMAINDER_ASSISTANT_ID
 )
 import math
 import logging
@@ -329,6 +331,211 @@ def get_renewal_assistant_id_for_stage(stage):
     return assistant_map.get(stage)
 
 
+def should_skip_mortgage_bill_row(customer):
+    """
+    Check if a mortgage bill row should be skipped
+    
+    Only process rows that meet ALL of:
+    - payee = "Mortgage Billed" (case-insensitive)
+    - status != "Renewal Paid" (case-insensitive)
+    
+    Skip if ANY of:
+    - done is checked/true
+    - company is empty
+    - client_phone_number is empty
+    - expiration_date is empty or invalid
+    - payee is not "Mortgage Billed"
+    - status is "Renewal Paid"
+    
+    Args:
+        customer: Customer dict
+        
+    Returns:
+        tuple: (should_skip: bool, reason: str)
+    """
+    # Check done checkbox
+    if customer.get('done?') in [True, 'true', 'True', 1]:
+        return True, "Done checkbox is checked"
+
+    # Check required fields
+    if not customer.get('company', '').strip():
+        return True, "Company is empty"
+
+    # Use Client Phone Number (actual column name from sheet)
+    phone_field = customer.get('client_phone_number', '') or customer.get('phone_number', '')
+    if not phone_field.strip():
+        return True, "Phone number is empty"
+
+    # Use Expiration Date (actual column name from sheet)
+    expiry_field = customer.get('expiration_date', '') or customer.get('expiration date', '')
+    if not expiry_field.strip():
+        return True, "Expiration date is empty"
+
+    # Check payee - must be "Mortgage Billed"
+    payee = str(customer.get('payee', '')).strip().lower()
+    if 'mortgage billed' not in payee and 'mortgagebilled' not in payee.replace(' ', ''):
+        return True, f"Payee is not 'Mortgage Billed' (Payee: {customer.get('payee', 'N/A')})"
+    
+    # Check status - must NOT be "Renewal Paid"
+    status = str(customer.get('status', '')).strip().lower()
+    if 'renewal paid' in status or 'renewalpaid' in status.replace(' ', ''):
+        return True, f"Status is 'Renewal Paid' (Status: {customer.get('status', 'N/A')})"
+
+    return False, ""
+
+
+def get_mortgage_bill_stage(customer):
+    """
+    Get the current mortgage bill call stage for a customer
+    
+    Returns:
+        int: Stage number (0 for empty/null, 1, 2+)
+    """
+    # Try multiple possible column names (normalized)
+    stage = customer.get('mortgage_bill_stage', '') or customer.get('stage', '')
+    
+    if not stage or stage == '' or stage is None:
+        return 0
+    
+    try:
+        return int(stage)
+    except (ValueError, TypeError):
+        return 0
+
+
+def is_mortgage_bill_ready_for_calling(customer, today):
+    """
+    Check if a mortgage bill customer is ready for calling based on timeline logic
+    
+    All date calculations are based on the expiration_date column:
+    - 14 days before expiration_date → Stage 0 (1st Call)
+    - 7 days before expiration_date → Stage 1 (2nd Call)
+    
+    Args:
+        customer: Customer dict
+        today: Current date
+        
+    Returns:
+        tuple: (is_ready: bool, reason: str, stage: int)
+    """
+    # Skip if today is weekend (no calls on weekends)
+    if is_weekend(today):
+        return False, f"Today is {today.strftime('%A')} (weekend) - no calls on weekends", -1
+    
+    # Parse expiration date from sheet
+    expiry_date_str = customer.get('expiration_date', '') or customer.get('expiration date', '')
+    expiry_date = parse_date(expiry_date_str)
+    
+    if not expiry_date:
+        return False, "Invalid policy expiry date", -1
+    
+    # Calculate days until expiry
+    days_until_expiry = (expiry_date - today).days
+    
+    # Check if we should stop calling (expired)
+    if days_until_expiry < 0:
+        return False, f"Policy already expired ({abs(days_until_expiry)} days ago)", -1
+    
+    # Check if today matches any of the calling schedule days
+    # Mortgage Bill: 14 days and 7 days before expiration
+    mortgage_bill_schedule = [14, 7]
+    
+    for stage, days_before in enumerate(mortgage_bill_schedule):
+        target_date = expiry_date - timedelta(days=days_before)
+        
+        # If target date is weekend, adjust to previous Friday
+        if is_weekend(target_date):
+            # Calculate days to go back to Friday
+            if target_date.weekday() == 5:  # Saturday
+                days_to_friday = 1
+            else:  # Sunday (weekday=6)
+                days_to_friday = 2
+            
+            adjusted_target_date = target_date - timedelta(days=days_to_friday)
+            adjusted_days_before = (expiry_date - adjusted_target_date).days
+            
+            # Check if today matches the adjusted target date
+            if today == adjusted_target_date:
+                return True, f"Ready for mortgage bill stage {stage} call (adjusted from {days_before} days to {adjusted_days_before} days before expiry - target was {target_date.strftime('%A')})", stage
+        else:
+            # Target date is weekday, check if today matches
+            if today == target_date:
+                return True, f"Ready for mortgage bill stage {stage} call ({days_before} days before expiry)", stage
+    
+    return False, f"Not ready for mortgage bill call (expires in {days_until_expiry} days)", -1
+
+
+def get_mortgage_bill_customers_ready_for_calls(smartsheet_service):
+    """
+    Get all mortgage bill customers ready for calls today based on timeline logic
+    
+    Returns:
+        dict: Customers grouped by stage {0: [...], 1: [...]}
+    """
+    print("=" * 80)
+    print("🔍 FETCHING MORTGAGE BILL CUSTOMERS READY FOR CALLS")
+    print("=" * 80)
+
+    # Get all customers from sheet
+    all_customers = smartsheet_service.get_all_customers_with_stages()
+
+    # Use Pacific Time for "today" to ensure consistent behavior
+    pacific_tz = ZoneInfo("America/Los_Angeles")
+    today = datetime.now(pacific_tz).date()
+    print(f"📅 Today (Pacific Time): {today}")
+    print(f"⏰ Mortgage Bill calling schedule: 14 days and 7 days before expiry")
+
+    customers_by_stage = {0: [], 1: []}  # 2 stages: 14, 7 days before
+    skipped_count = 0
+    
+    for customer in all_customers:
+        # Initial validation
+        should_skip, skip_reason = should_skip_mortgage_bill_row(customer)
+        if should_skip:
+            skipped_count += 1
+            print(f"   ⏭️  Skipping row {customer.get('row_number')}: {skip_reason}")
+            continue
+        
+        # Get current stage
+        current_stage = get_mortgage_bill_stage(customer)
+        
+        # Skip if stage >= 2 (call sequence complete - both calls made)
+        if current_stage >= 2:
+            skipped_count += 1
+            print(f"   ⏭️  Skipping row {customer.get('row_number')}: Mortgage bill sequence complete (stage {current_stage})")
+            continue
+        
+        # Check if ready for calling based on timeline
+        is_ready, ready_reason, target_stage = is_mortgage_bill_ready_for_calling(customer, today)
+        if not is_ready:
+            skipped_count += 1
+            print(f"   ⏭️  Skipping row {customer.get('row_number')}: {ready_reason}")
+            continue
+        
+        # Check if the customer is at the right stage for today's call
+        if current_stage != target_stage:
+            if current_stage < target_stage:
+                # Customer missed earlier stages - allow auto-adjustment
+                print(f"   ⚠️  Row {customer.get('row_number')}: Auto-adjusting mortgage bill stage {current_stage} → {target_stage} (missed earlier stages)")
+            else:
+                # Customer already passed this stage - skip
+                skipped_count += 1
+                print(f"   ⏭️  Skipping row {customer.get('row_number')}: Already past this stage (current: {current_stage}, needed: {target_stage})")
+                continue
+        
+        customers_by_stage[target_stage].append(customer)
+        stage_names = ["14 days before", "7 days before"]
+        print(f"   ✅ Row {customer.get('row_number')}: Stage {target_stage} ({stage_names[target_stage]}), ready for mortgage bill call")
+    
+    print(f"\n📊 Summary:")
+    print(f"   Stage 0 (14 days before): {len(customers_by_stage[0])} customers")
+    print(f"   Stage 1 (7 days before): {len(customers_by_stage[1])} customers")
+    print(f"   Skipped: {skipped_count} rows")
+    print(f"   Total ready: {sum(len(v) for v in customers_by_stage.values())}")
+    
+    return customers_by_stage
+
+
 # ========================================
 # Renewal Timeline Logic
 # ========================================
@@ -605,6 +812,186 @@ def format_renewal_call_entry(summary, evaluation, call_number):
     entry = f"[Renewal Call {call_number} - {timestamp}]\n{summary}\n"
     eval_entry = f"[Renewal Call {call_number} - {timestamp}]\n{evaluation}\n"
     return entry, eval_entry
+
+
+def update_after_mortgage_bill_call(smartsheet_service, customer, call_data, call_stage):
+    """
+    Update Smartsheet after a successful mortgage bill call
+    
+    Args:
+        smartsheet_service: SmartsheetService instance
+        customer: Customer dict
+        call_data: Call result data from VAPI
+        call_stage: Stage at which the call was made (0 or 1)
+    """
+    # Extract call analysis
+    analysis = call_data.get('analysis', {})
+    
+    # Debug: Print analysis structure
+    if not analysis:
+        print(f"⚠️  WARNING: No analysis found in call_data")
+        print(f"   Call data keys: {list(call_data.keys())}")
+        # Try to get analysis from different possible locations
+        if 'result' in call_data and isinstance(call_data['result'], dict):
+            analysis = call_data['result'].get('analysis', {})
+            print(f"   Found analysis in call_data['result']")
+        if not analysis and 'call_data' in call_data:
+            analysis = call_data['call_data'].get('analysis', {})
+            print(f"   Found analysis in call_data['call_data']")
+    
+    # Check if this is a voicemail call
+    ended_reason = call_data.get('endedReason', '')
+    is_voicemail = (ended_reason == 'voicemail')
+    
+    summary = analysis.get('summary', '') if analysis else ''
+    if not summary or summary == '':
+        # Try alternative locations for summary
+        if analysis:
+            summary = analysis.get('transcript', '') or analysis.get('summaryText', '') or 'No summary available'
+        else:
+            # If no analysis and it's voicemail, use "Left voicemail" instead of "No summary available"
+            if is_voicemail:
+                summary = 'Left voicemail'
+            else:
+                summary = 'No summary available'
+        if summary == 'No summary available':
+            print(f"⚠️  WARNING: No summary found in analysis")
+            print(f"   Analysis keys: {list(analysis.keys()) if analysis else 'N/A'}")
+
+    # Get evaluation with fallback to structured data
+    evaluation = analysis.get('successEvaluation')
+    if not evaluation:
+        structured_data = analysis.get('structuredData', {})
+        if structured_data:
+            evaluation = structured_data.get('success', 'N/A')
+        else:
+            evaluation = 'N/A'
+
+    evaluation = str(evaluation).lower()
+
+    # Determine new stage (advance to next stage after this call)
+    new_stage = call_stage + 1
+
+    # Calculate next followup date (None for stage 1 - final call)
+    expiry_date_str = customer.get('expiration_date', '') or customer.get('expiration date', '')
+    expiry_date = parse_date(expiry_date_str)
+    next_followup_date = None
+    
+    if call_stage == 0 and expiry_date:
+        # After 1st call: Next call is 7 days before expiration
+        next_followup_date = expiry_date - timedelta(days=7)
+        print(f"   📅 Stage 0→1: Next call 7 days before expiration ({next_followup_date})")
+    else:
+        # Final call - no more follow-ups
+        print(f"   📅 Stage {call_stage}: Final mortgage bill call - no more follow-ups")
+
+    # Format entries for appending
+    call_number = call_stage + 1
+    summary_entry, eval_entry = format_renewal_call_entry(summary, evaluation, call_number)
+
+    # Get existing values
+    existing_summary = customer.get('mortgage_bill_call_summary', '') or customer.get('renewal_call_summary', '')
+    existing_eval = customer.get('mortgage_bill_call_eval', '') or customer.get('renewal_call_eval', '')
+    
+    # Format call summary for Call Notes column (same format as renewal calls)
+    start_time_str = call_data.get('startedAt') or call_data.get('createdAt', '')
+    if start_time_str:
+        try:
+            start_time_utc = datetime.fromisoformat(start_time_str.replace('Z', '+00:00'))
+            pacific_tz = ZoneInfo("America/Los_Angeles")
+            start_time_pacific = start_time_utc.astimezone(pacific_tz)
+            call_placed_at = start_time_pacific.strftime('%Y-%m-%d %H:%M:%S')
+        except:
+            call_placed_at = datetime.now(ZoneInfo("America/Los_Angeles")).strftime('%Y-%m-%d %H:%M:%S')
+    else:
+        call_placed_at = datetime.now(ZoneInfo("America/Los_Angeles")).strftime('%Y-%m-%d %H:%M:%S')
+    
+    no_answer_reasons = [
+        'voicemail',
+        'customer-did-not-answer',
+        'customer-busy',
+        'twilio-failed-to-connect-call',
+        'assistant-error'
+    ]
+    did_client_answer = 'No' if ended_reason in no_answer_reasons else 'Yes'
+    
+    was_full_message_conveyed = 'No'
+    if did_client_answer == 'Yes':
+        if ended_reason == 'assistant-forwarded-call':
+            was_full_message_conveyed = 'Yes'
+        elif ended_reason == 'customer-ended-call':
+            if analysis and summary and summary != 'No summary available':
+                was_full_message_conveyed = 'Yes'
+            else:
+                was_full_message_conveyed = 'No'
+        else:
+            was_full_message_conveyed = 'No'
+    
+    was_voicemail_left = 'Yes' if is_voicemail else 'No'
+    
+    call_notes_structured = f"""Call Placed At: {call_placed_at}
+
+Did Client Answer: {did_client_answer}
+
+Was Full Message Conveyed: {was_full_message_conveyed}
+
+Was Voicemail Left: {was_voicemail_left}
+"""
+    
+    if is_voicemail:
+        call_notes_summary = 'Left voicemail'
+    else:
+        call_notes_summary = summary if summary and summary != 'No summary available' else ''
+    
+    if call_notes_summary:
+        call_notes_entry = call_notes_structured + f"\nanalysis:\n\n{call_notes_summary}\n"
+    else:
+        call_notes_entry = call_notes_structured
+    
+    existing_notes = customer.get('call_notes', '') or customer.get('mortgage_bill_call_notes', '')
+    
+    if existing_notes:
+        new_call_notes = existing_notes + "\n---\n" + call_notes_entry
+    else:
+        new_call_notes = call_notes_entry
+
+    if existing_summary:
+        new_summary = existing_summary + "\n---\n" + summary_entry
+    else:
+        new_summary = summary_entry
+
+    if existing_eval:
+        new_eval = existing_eval + "\n---\n" + eval_entry
+    else:
+        new_eval = eval_entry
+
+    pacific_tz = ZoneInfo("America/Los_Angeles")
+    current_date = datetime.now(pacific_tz).date()
+    last_call_date_str = current_date.strftime('%Y-%m-%d')
+    
+    updates = {
+        'mortgage_bill_stage': new_stage,  # Use mortgage_bill_stage column if exists, otherwise stage
+        'call_notes': new_call_notes,
+        'last_call_made_date': last_call_date_str,
+    }
+
+    if next_followup_date:
+        updates['f_u_date'] = next_followup_date.strftime('%Y-%m-%d')
+
+    # Perform update
+    success = smartsheet_service.update_customer_fields(customer, updates)
+
+    if success:
+        print(f"✅ Smartsheet updated successfully")
+        print(f"   • Mortgage Bill Stage: {call_stage} → {new_stage}")
+        print(f"   • Call Notes: Updated with summary (Call #{call_number})")
+        print(f"   • Last Call Made Date: {last_call_date_str}")
+        if next_followup_date:
+            print(f"   • Next F/U Date: {next_followup_date}")
+    else:
+        print(f"❌ Smartsheet update failed")
+
+    return success
 
 
 def update_after_renewal_call(smartsheet_service, customer, call_data, call_stage):
@@ -942,23 +1329,43 @@ def run_renewal_batch_calling(test_mode=False, schedule_at=None, auto_confirm=Fa
     # Get customers grouped by stage
     customers_by_stage = get_renewal_customers_ready_for_calls(smartsheet_service)
     
+    # Get mortgage bill customers ready for calls
+    mortgage_bill_customers_by_stage = get_mortgage_bill_customers_ready_for_calls(smartsheet_service)
+    
     # Get expired after customers (Expiration Date过了一天之后)
     EXPIRED_AFTER_ASSISTANT_ID = "aec4721c-360c-45b5-ba39-87320eab6fc9"
     expired_after_customers = get_renewal_expired_after_customers(smartsheet_service)
     
     total_non_expired = sum(len(v) for v in customers_by_stage.values())
+    total_mortgage_bill = sum(len(v) for v in mortgage_bill_customers_by_stage.values())
     total_expired_after = len(expired_after_customers)
-    total_customers = total_non_expired + total_expired_after
+    total_customers = total_non_expired + total_mortgage_bill + total_expired_after
     
     if total_customers == 0:
-        print("\n✅ No renewal customers ready for calls today")
+        print("\n✅ No renewal or mortgage bill customers ready for calls today")
         return True
     
     # Show summary and ask for confirmation
     print(f"\n{'=' * 80}")
-    print(f"📊 RENEWAL CUSTOMERS READY FOR CALLS TODAY:")
+    print(f"📊 RENEWAL & MORTGAGE BILL CUSTOMERS READY FOR CALLS TODAY:")
     print(f"{'=' * 80}")
     
+    # Show mortgage bill customers first
+    if total_mortgage_bill > 0:
+        print(f"\n🏠 MORTGAGE BILL CUSTOMERS - {total_mortgage_bill} customers:")
+        for stage, customers in mortgage_bill_customers_by_stage.items():
+            if customers:
+                stage_names = ["14 days before", "7 days before"]
+                assistant_id = MORTGAGE_BILL_1ST_REMAINDER_ASSISTANT_ID if stage == 0 else MORTGAGE_BILL_2ND_REMAINDER_ASSISTANT_ID
+                print(f"\n   🔔 Stage {stage} ({stage_names[stage]}) - {len(customers)} customers:")
+                print(f"      🤖 Assistant ID: {assistant_id}")
+                for i, customer in enumerate(customers[:5], 1):
+                    phone = customer.get('phone_number') or customer.get('client_phone_number', 'N/A')
+                    print(f"      {i}. {customer.get('company', 'Unknown')} - {phone}")
+                if len(customers) > 5:
+                    print(f"      ... and {len(customers) - 5} more")
+    
+    print(f"\n📋 RENEWAL CUSTOMERS:")
     for stage, customers in customers_by_stage.items():
         if customers:
             stage_names_short = ["1st", "2nd", "3rd", "Final"]
@@ -989,13 +1396,15 @@ def run_renewal_batch_calling(test_mode=False, schedule_at=None, auto_confirm=Fa
     
     print(f"\n{'=' * 80}")
     if not test_mode:
-        print(f"⚠️  WARNING: This will make {total_customers} renewal phone calls!")
-        print(f"   • 未过期保单: {total_non_expired} 通")
+        print(f"⚠️  WARNING: This will make {total_customers} phone calls!")
+        print(f"   • Renewal (未过期保单): {total_non_expired} 通")
+        print(f"   • Mortgage Bill: {total_mortgage_bill} 通")
         print(f"   • 过期后保单: {total_expired_after} 通")
         print(f"💰 This will incur charges for each call")
     else:
-        print(f"🧪 TEST MODE: Will simulate {total_customers} renewal calls (no charges)")
-        print(f"   • 未过期保单: {total_non_expired} 通")
+        print(f"🧪 TEST MODE: Will simulate {total_customers} calls (no charges)")
+        print(f"   • Renewal (未过期保单): {total_non_expired} 通")
+        print(f"   • Mortgage Bill: {total_mortgage_bill} 通")
         print(f"   • 过期后保单: {total_expired_after} 通")
     print(f"{'=' * 80}")
 
@@ -1291,6 +1700,146 @@ def run_renewal_batch_calling(test_mode=False, schedule_at=None, auto_confirm=Fa
                     error_logger.log_error({}, -1, 'VAPI_BATCH_CALL_EXCEPTION', f"Exception during VAPI batch call: {e}", e)
                     total_failed += len(validated_customers)
     
+    # Process mortgage bill customers
+    if total_mortgage_bill > 0:
+        print(f"\n{'=' * 80}")
+        print(f"📞 MORTGAGE BILL CALLING - {total_mortgage_bill} customers")
+        print(f"{'=' * 80}")
+        
+        for stage in [0, 1]:
+            customers = mortgage_bill_customers_by_stage[stage]
+            
+            if not customers:
+                continue
+            
+            stage_names = ["14 days before", "7 days before"]
+            stage_name = stage_names[stage]
+            assistant_id = MORTGAGE_BILL_1ST_REMAINDER_ASSISTANT_ID if stage == 0 else MORTGAGE_BILL_2ND_REMAINDER_ASSISTANT_ID
+            
+            print(f"\n{'=' * 80}")
+            print(f"📞 MORTGAGE BILL CALLING STAGE {stage} ({stage_name}) - {len(customers)} customers")
+            print(f"🤖 Using Assistant: {assistant_id}")
+            print(f"{'=' * 80}")
+            
+            if test_mode:
+                print(f"\n🧪 TEST MODE: Simulating {len(customers)} mortgage bill calls...")
+                for customer in customers:
+                    phone = customer.get('phone_number') or customer.get('client_phone_number', 'N/A')
+                    print(f"   ✅ [SIMULATED] Would call: {customer.get('company', 'Unknown')} - {phone}")
+                    total_success += 1
+            else:
+                # Stage 0: Batch calling (all customers simultaneously)
+                if stage == 0:
+                    print(f"📦 Batch calling mode (simultaneous)")
+                    try:
+                        results = vapi_service.make_batch_call_with_assistant(
+                            customers,
+                            assistant_id,
+                            schedule_immediately=(schedule_at is None),
+                            schedule_at=schedule_at
+                        )
+                        
+                        if results:
+                            print(f"\n✅ Stage {stage} mortgage bill batch calls completed")
+                            
+                            if schedule_at is None:
+                                for i, customer in enumerate(customers):
+                                    if i < len(results):
+                                        call_data = results[i]
+                                    else:
+                                        call_data = results[0] if results else None
+                                    
+                                    if call_data:
+                                        if 'analysis' not in call_data or not call_data.get('analysis'):
+                                            if 'id' in call_data:
+                                                call_id = call_data['id']
+                                                try:
+                                                    refreshed_data = vapi_service.check_call_status(call_id)
+                                                    if refreshed_data and refreshed_data.get('analysis'):
+                                                        call_data = refreshed_data
+                                                except Exception as e:
+                                                    print(f"      ❌ Failed to refresh call status: {e}")
+                                        
+                                        try:
+                                            success = update_after_mortgage_bill_call(smartsheet_service, customer, call_data, stage)
+                                            if success:
+                                                total_success += 1
+                                            else:
+                                                error_logger.log_error(customer, stage, 'SMARTSHEET_UPDATE_FAILED', "Failed to update Smartsheet after mortgage bill call")
+                                                total_failed += 1
+                                        except Exception as e:
+                                            error_logger.log_error(customer, stage, 'SMARTSHEET_UPDATE_ERROR', f"Exception during Smartsheet update: {e}", e)
+                                            total_failed += 1
+                                    else:
+                                        error_logger.log_error(customer, stage, 'VAPI_CALL_FAILED', "VAPI call returned no data")
+                                        total_failed += 1
+                            else:
+                                print(f"   ⏰ Calls scheduled - Smartsheet will be updated after calls complete")
+                                total_success += len(customers)
+                        else:
+                            print(f"\n❌ Stage {stage} mortgage bill batch calls failed")
+                            for customer in customers:
+                                error_logger.log_error(customer, stage, 'VAPI_CALL_FAILED', "VAPI API returned no results")
+                            total_failed += len(customers)
+                    except Exception as e:
+                        print(f"\n❌ Stage {stage} mortgage bill batch calls failed with exception")
+                        for customer in customers:
+                            error_logger.log_error(customer, stage, 'VAPI_CALL_EXCEPTION', f"Exception during VAPI call: {e}", e)
+                        total_failed += len(customers)
+                
+                # Stage 1: Sequential calling (one customer at a time)
+                else:
+                    print(f"🔄 Sequential calling mode (one at a time)")
+                    
+                    for i, customer in enumerate(customers, 1):
+                        print(f"\n   📞 Call {i}/{len(customers)}: {customer.get('company', 'Unknown')}")
+                        
+                        try:
+                            results = vapi_service.make_batch_call_with_assistant(
+                                [customer],
+                                assistant_id,
+                                schedule_immediately=(schedule_at is None),
+                                schedule_at=schedule_at
+                            )
+                            
+                            if results and results[0]:
+                                call_data = results[0]
+                                
+                                if 'analysis' not in call_data or not call_data.get('analysis'):
+                                    if 'id' in call_data:
+                                        call_id = call_data['id']
+                                        try:
+                                            refreshed_data = vapi_service.check_call_status(call_id)
+                                            if refreshed_data and refreshed_data.get('analysis'):
+                                                call_data = refreshed_data
+                                        except Exception as e:
+                                            print(f"   ❌ Failed to refresh call status: {e}")
+                                
+                                if schedule_at is None:
+                                    try:
+                                        success = update_after_mortgage_bill_call(smartsheet_service, customer, call_data, stage)
+                                        if success:
+                                            total_success += 1
+                                        else:
+                                            error_logger.log_error(customer, stage, 'SMARTSHEET_UPDATE_FAILED', "Failed to update Smartsheet after mortgage bill call")
+                                            total_failed += 1
+                                    except Exception as e:
+                                        error_logger.log_error(customer, stage, 'SMARTSHEET_UPDATE_ERROR', f"Exception during Smartsheet update: {e}", e)
+                                        total_failed += 1
+                                else:
+                                    print(f"      ⏰ Call scheduled - Smartsheet will be updated after call completes")
+                                    total_success += 1
+                            else:
+                                print(f"      ❌ Call {i} failed")
+                                error_logger.log_error(customer, stage, 'VAPI_CALL_FAILED', "VAPI call returned no data")
+                                total_failed += 1
+                        except Exception as e:
+                            print(f"      ❌ Call {i} failed with exception")
+                            error_logger.log_error(customer, stage, 'VAPI_CALL_EXCEPTION', f"Exception during VAPI call: {e}", e)
+                            total_failed += 1
+                    
+                    print(f"\n✅ Stage {stage} mortgage bill sequential calls completed")
+    
     # Final summary
     print(f"\n{'=' * 80}")
     print(f"🏁 RENEWAL BATCH CALLING COMPLETE")
@@ -1298,7 +1847,8 @@ def run_renewal_batch_calling(test_mode=False, schedule_at=None, auto_confirm=Fa
     print(f"   ✅ Successful: {total_success}")
     print(f"   ❌ Failed: {total_failed}")
     print(f"   📊 Total: {total_success + total_failed}")
-    print(f"   • 未过期保单: {total_non_expired}")
+    print(f"   • Renewal (未过期保单): {total_non_expired}")
+    print(f"   • Mortgage Bill: {total_mortgage_bill}")
     print(f"   • 过期后保单: {total_expired_after}")
     print(f"{'=' * 80}")
     

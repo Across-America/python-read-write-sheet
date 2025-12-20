@@ -102,15 +102,45 @@ def parse_date(date_str):
 # Data Validation and Filtering
 # ========================================
 
+def get_cancellation_type(customer):
+    """
+    Determine the cancellation type based on cancellation reason
+    
+    Returns:
+        str: 'general', 'non_payment', or 'other'
+    """
+    cancellation_reason = str(customer.get('cancellation_reason', '') or customer.get('cancellation reason', '')).strip().lower()
+    
+    general_reasons = ['uw reason', 'uwreason', 'underwriter declined', 'underwriterdeclined', 'unresponsive insured', 'unresponsiveinsured']
+    if any(reason in cancellation_reason for reason in general_reasons):
+        return 'general'
+    
+    if 'non-payment' in cancellation_reason or 'nonpayment' in cancellation_reason.replace('-', '').replace(' ', ''):
+        return 'non_payment'
+    
+    return 'other'
+
+
 def should_skip_row(customer):
     """
     Check if a row should be skipped based on initial validation rules
 
+    For General cancellation calls (UW Reason, Underwriter Declined, Unresponsive Insured):
+    - NO PAYMENT AMOUNT NEEDED
+    - expiration_date is required (not cancellation_date)
+    - Status must not be "Paid"
+    
+    For Non-Payment cancellation calls:
+    - amount_due is required
+    - cancellation_date is required
+    - Status must not be "Paid"
+
     Skip if ANY of:
-    - amount_due is empty
-    - cancellation_date is empty
     - done is checked/true
-    - cancellation_date is not after f_u_date
+    - Status is "Paid"
+    - For General: expiration_date is empty
+    - For Non-Payment: amount_due is empty or cancellation_date is empty
+    - For Non-Payment: cancellation_date is not after f_u_date
 
     Note: Company field is not required (removed validation)
 
@@ -123,27 +153,53 @@ def should_skip_row(customer):
     # Check done checkbox
     if customer.get('done?') in [True, 'true', 'True', 1]:
         return True, "Done checkbox is checked"
-
-    # Check required fields (company is no longer required)
-    if not customer.get('amount_due', '').strip():
-        return True, "Amount Due is empty"
-
-    if not customer.get('cancellation_date', '').strip():
-        return True, "Cancellation Date is empty"
-
-    # Check date relationship: cancellation_date must be after f_u_date
-    f_u_date_str = customer.get('f_u_date', '').strip()
-    cancellation_date_str = customer.get('cancellation_date', '').strip()
-
-    if f_u_date_str and cancellation_date_str:
-        f_u_date = parse_date(f_u_date_str)
-        cancellation_date = parse_date(cancellation_date_str)
-
-        if f_u_date and cancellation_date:
-            if cancellation_date <= f_u_date:
-                return True, f"Cancellation Date ({cancellation_date}) is not after F/U Date ({f_u_date})"
-
-    return False, ""
+    
+    # Check status - must not be "Paid"
+    status = str(customer.get('status', '')).strip().lower()
+    if 'paid' in status:
+        return True, f"Status is 'Paid' (Status: {customer.get('status', 'N/A')})"
+    
+    # Determine cancellation type
+    cancellation_type = get_cancellation_type(customer)
+    
+    if cancellation_type == 'general':
+        # General cancellation: NO PAYMENT AMOUNT NEEDED, use expiration_date
+        expiration_date_str = customer.get('expiration_date', '') or customer.get('expiration date', '')
+        if not expiration_date_str.strip():
+            return True, "Expiration Date is empty (required for General cancellation)"
+        return False, ""
+    
+    elif cancellation_type == 'non_payment':
+        # Non-Payment cancellation: amount_due and cancellation_date required
+        if not customer.get('amount_due', '').strip():
+            return True, "Amount Due is empty (required for Non-Payment cancellation)"
+        
+        if not customer.get('cancellation_date', '').strip():
+            return True, "Cancellation Date is empty (required for Non-Payment cancellation)"
+        
+        # Check date relationship: cancellation_date must be after f_u_date
+        f_u_date_str = customer.get('f_u_date', '').strip()
+        cancellation_date_str = customer.get('cancellation_date', '').strip()
+        
+        if f_u_date_str and cancellation_date_str:
+            f_u_date = parse_date(f_u_date_str)
+            cancellation_date = parse_date(cancellation_date_str)
+            
+            if f_u_date and cancellation_date:
+                if cancellation_date <= f_u_date:
+                    return True, f"Cancellation Date ({cancellation_date}) is not after F/U Date ({f_u_date})"
+        
+        return False, ""
+    
+    else:
+        # Other cancellation types: use original logic (require amount_due and cancellation_date)
+        if not customer.get('amount_due', '').strip():
+            return True, "Amount Due is empty"
+        
+        if not customer.get('cancellation_date', '').strip():
+            return True, "Cancellation Date is empty"
+        
+        return False, ""
 
 
 def get_call_stage(customer):
@@ -181,7 +237,17 @@ def get_assistant_id_for_stage(stage):
 
 def calculate_next_followup_date(customer, current_stage):
     """
-    Calculate the next follow-up date based on current stage
+    Calculate the next follow-up date based on current stage and cancellation type
+    
+    For General cancellation:
+    - Stage 0 → Stage 1: 7 days before expiration_date
+    - Stage 1 → Stage 2: 3 days before expiration_date
+    - Stage 2: Final call - no more follow-ups
+    
+    For Non-Payment cancellation:
+    - Stage 0 → Stage 1: Calculate based on business days (1/3 of remaining)
+    - Stage 1 → Stage 2: Calculate based on business days (1/2 of remaining)
+    - Stage 2: Final call - no more follow-ups
     
     Args:
         customer: Customer dict
@@ -190,6 +256,80 @@ def calculate_next_followup_date(customer, current_stage):
     Returns:
         date or None: Next follow-up date
     """
+    cancellation_type = get_cancellation_type(customer)
+    
+    if cancellation_type == 'general':
+        # General cancellation: use expiration_date and calendar days
+        expiration_date_str = customer.get('expiration_date', '') or customer.get('expiration date', '')
+        expiration_date = parse_date(expiration_date_str)
+        
+        if not expiration_date:
+            print(f"   ⚠️  Invalid expiration date: {expiration_date_str}")
+            return None
+        
+        if current_stage == 0:
+            # After 1st call: Next call is 7 days before expiration
+            next_date = expiration_date - timedelta(days=7)
+            print(f"   📅 Stage 0→1: Next call 7 days before expiration ({next_date})")
+            return next_date
+        elif current_stage == 1:
+            # After 2nd call: Next call is 3 days before expiration
+            next_date = expiration_date - timedelta(days=3)
+            print(f"   📅 Stage 1→2: Next call 3 days before expiration ({next_date})")
+            return next_date
+        elif current_stage == 2:
+            # After 3rd call: No more follow-ups
+            print(f"   📅 Stage 2: Final call - no more follow-ups")
+            return None
+    
+    elif cancellation_type == 'non_payment':
+        # Non-Payment cancellation: use cancellation_date and business days
+        followup_date_str = customer.get('f_u_date', '')
+        cancellation_date_str = customer.get('cancellation_date', '')
+        
+        followup_date = parse_date(followup_date_str)
+        cancellation_date = parse_date(cancellation_date_str)
+        
+        if not followup_date or not cancellation_date:
+            print(f"   ⚠️  Invalid dates: followup={followup_date}, cancellation={cancellation_date}")
+            return None
+        
+        if current_stage == 0:
+            # After 1st call: Calculate 1/3 of total business days
+            total_business_days = count_business_days(followup_date, cancellation_date)
+            target_days = round(total_business_days / 3.0)
+            
+            if target_days < 1:
+                target_days = 1
+            
+            next_date = add_business_days(followup_date, target_days)
+            
+            print(f"   📅 Stage 0→1: Total {total_business_days} business days, adding {target_days} days")
+            print(f"      From {followup_date} → {next_date}")
+            
+            return next_date
+        
+        elif current_stage == 1:
+            # After 2nd call: Calculate 1/2 of remaining business days
+            remaining_business_days = count_business_days(followup_date, cancellation_date)
+            target_days = round(remaining_business_days / 2.0)
+            
+            if target_days < 1:
+                target_days = 1
+            
+            next_date = add_business_days(followup_date, target_days)
+            
+            print(f"   📅 Stage 1→2: Remaining {remaining_business_days} business days, adding {target_days} days")
+            print(f"      From {followup_date} → {next_date}")
+            
+            return next_date
+        
+        elif current_stage == 2:
+            # After 3rd call: No more follow-ups
+            print(f"   📅 Stage 2: Final call - no more follow-ups")
+            return None
+    
+    # Default: use original logic for other types
     followup_date_str = customer.get('f_u_date', '')
     cancellation_date_str = customer.get('cancellation_date', '')
     
@@ -201,38 +341,23 @@ def calculate_next_followup_date(customer, current_stage):
         return None
     
     if current_stage == 0:
-        # After 1st call: Calculate 1/3 of total business days
         total_business_days = count_business_days(followup_date, cancellation_date)
         target_days = round(total_business_days / 3.0)
-        
         if target_days < 1:
             target_days = 1
-        
         next_date = add_business_days(followup_date, target_days)
-        
         print(f"   📅 Stage 0→1: Total {total_business_days} business days, adding {target_days} days")
-        print(f"      From {followup_date} → {next_date}")
-        
         return next_date
-    
     elif current_stage == 1:
-        # After 2nd call: Calculate 1/2 of remaining business days
         remaining_business_days = count_business_days(followup_date, cancellation_date)
         target_days = round(remaining_business_days / 2.0)
-        
         if target_days < 1:
             target_days = 1
-        
         next_date = add_business_days(followup_date, target_days)
-        
         print(f"   📅 Stage 1→2: Remaining {remaining_business_days} business days, adding {target_days} days")
-        print(f"      From {followup_date} → {next_date}")
-        
         return next_date
-    
     elif current_stage == 2:
-        # After 3rd call: No more follow-ups
-        print(f"   📅 Stage 2→3: Final call - no more follow-ups")
+        print(f"   📅 Stage 2: Final call - no more follow-ups")
         return None
     
     return None
@@ -242,12 +367,119 @@ def calculate_next_followup_date(customer, current_stage):
 # Main Workflow Functions
 # ========================================
 
+def is_general_cancellation_ready_for_calling(customer, today):
+    """
+    Check if a General cancellation customer is ready for calling
+    Uses expiration_date and calendar days (14, 7, 3 days before)
+    
+    Args:
+        customer: Customer dict
+        today: Current date
+        
+    Returns:
+        tuple: (is_ready: bool, reason: str, stage: int)
+    """
+    # Parse expiration date
+    expiration_date_str = customer.get('expiration_date', '') or customer.get('expiration date', '')
+    expiration_date = parse_date(expiration_date_str)
+    
+    if not expiration_date:
+        return False, "Invalid expiration date", -1
+    
+    # Calculate days until expiration
+    days_until_expiration = (expiration_date - today).days
+    
+    # Check if expired
+    if days_until_expiration < 0:
+        return False, f"Policy already expired ({abs(days_until_expiration)} days ago)", -1
+    
+    # General cancellation schedule: 14 days, 7 days, 3 days before expiration
+    general_schedule = [14, 7, 3]
+    
+    for stage, days_before in enumerate(general_schedule):
+        target_date = expiration_date - timedelta(days=days_before)
+        
+        # If target date is weekend, adjust to previous Friday
+        if is_weekend(target_date):
+            if target_date.weekday() == 5:  # Saturday
+                days_to_friday = 1
+            else:  # Sunday
+                days_to_friday = 2
+            adjusted_target_date = target_date - timedelta(days=days_to_friday)
+            
+            if today == adjusted_target_date:
+                return True, f"Ready for General cancellation stage {stage} call (adjusted from {days_before} days to {adjusted_target_date} - target was {target_date.strftime('%A')})", stage
+        else:
+            if today == target_date:
+                return True, f"Ready for General cancellation stage {stage} call ({days_before} days before expiration)", stage
+    
+    return False, f"Not ready for General cancellation call (expires in {days_until_expiration} days)", -1
+
+
+def is_non_payment_cancellation_ready_for_calling(customer, today):
+    """
+    Check if a Non-Payment cancellation customer is ready for calling
+    Uses cancellation_date and business days (14, 7, 1 business days before)
+    
+    Args:
+        customer: Customer dict
+        today: Current date
+        
+    Returns:
+        tuple: (is_ready: bool, reason: str, stage: int)
+    """
+    # Parse cancellation date
+    cancellation_date_str = customer.get('cancellation_date', '')
+    cancellation_date = parse_date(cancellation_date_str)
+    
+    if not cancellation_date:
+        return False, "Invalid cancellation date", -1
+    
+    # Calculate business days until cancellation
+    business_days_until = count_business_days(today, cancellation_date)
+    
+    # Check if already cancelled
+    if business_days_until < 0:
+        return False, f"Policy already cancelled ({abs(business_days_until)} business days ago)", -1
+    
+    # Non-Payment cancellation schedule: 14, 7, 1 business days before cancellation
+    non_payment_schedule = [14, 7, 1]
+    
+    for stage, business_days_before in enumerate(non_payment_schedule):
+        # Calculate target date by going back business days from cancellation_date
+        target_date = cancellation_date
+        business_days_back = 0
+        while business_days_back < business_days_before:
+            target_date = target_date - timedelta(days=1)
+            if not is_weekend(target_date):
+                business_days_back += 1
+        
+        if today == target_date:
+            return True, f"Ready for Non-Payment cancellation stage {stage} call ({business_days_before} business days before cancellation)", stage
+    
+    return False, f"Not ready for Non-Payment cancellation call ({business_days_until} business days until cancellation)", -1
+
+
 def get_customers_ready_for_calls(smartsheet_service):
     """
-    Get all customers ready for calls today based on stage logic
+    Get all customers ready for calls today based on cancellation type and stage logic
+    
+    Handles two types of cancellation calls:
+    1. General cancellation (UW Reason, Underwriter Declined, Unresponsive Insured):
+       - Uses expiration_date
+       - Calendar days: 14, 7, 3 days before expiration
+       - NO PAYMENT AMOUNT NEEDED
+    
+    2. Non-Payment cancellation:
+       - Uses cancellation_date
+       - Business days: 14, 7, 1 business days before cancellation
+       - Requires amount_due
 
     Returns:
-        dict: Customers grouped by stage {0: [...], 1: [...], 2: [...]}
+        dict: Customers grouped by type and stage {
+            'general': {0: [...], 1: [...], 2: [...]},
+            'non_payment': {0: [...], 1: [...], 2: [...]}
+        }
     """
     print("=" * 80)
     print("🔍 FETCHING CUSTOMERS READY FOR CALLS")
@@ -261,7 +493,10 @@ def get_customers_ready_for_calls(smartsheet_service):
     today = datetime.now(pacific_tz).date()
     print(f"📅 Today (Pacific Time): {today}")
 
-    customers_by_stage = {0: [], 1: [], 2: []}
+    customers_by_type_stage = {
+        'general': {0: [], 1: [], 2: []},
+        'non_payment': {0: [], 1: [], 2: []}
+    }
     skipped_count = 0
     
     for customer in all_customers:
@@ -270,6 +505,14 @@ def get_customers_ready_for_calls(smartsheet_service):
         if should_skip:
             skipped_count += 1
             print(f"   ⏭️  Skipping row {customer.get('row_number')}: {skip_reason}")
+            continue
+        
+        # Determine cancellation type
+        cancellation_type = get_cancellation_type(customer)
+        
+        if cancellation_type == 'other':
+            skipped_count += 1
+            print(f"   ⏭️  Skipping row {customer.get('row_number')}: Unknown cancellation type")
             continue
         
         # Get current stage
@@ -281,32 +524,59 @@ def get_customers_ready_for_calls(smartsheet_service):
             print(f"   ⏭️  Skipping row {customer.get('row_number')}: Call sequence complete (stage {stage})")
             continue
         
-        # Check f_u_date (Follow-up Date)
-        followup_date_str = customer.get('f_u_date', '')
-
-        # For stage 0, f_u_date must not be empty
-        if stage == 0 and not followup_date_str.strip():
-            skipped_count += 1
-            print(f"   ⏭️  Skipping row {customer.get('row_number')}: Stage 0 requires F/U Date")
-            continue
-
-        # Parse f_u_date
-        followup_date = parse_date(followup_date_str)
-
-        if not followup_date:
-            skipped_count += 1
-            print(f"   ⏭️  Skipping row {customer.get('row_number')}: Invalid F/U Date")
-            continue
-
-        # Check if f_u_date == today
-        if followup_date == today:
-            customers_by_stage[stage].append(customer)
-            print(f"   ✅ Row {customer.get('row_number')}: Stage {stage}, ready for call")
+        # Check if ready for calling based on cancellation type
+        if cancellation_type == 'general':
+            is_ready, reason, target_stage = is_general_cancellation_ready_for_calling(customer, today)
+            if is_ready:
+                # Check if customer is at the right stage
+                if stage == target_stage:
+                    customers_by_type_stage['general'][target_stage].append(customer)
+                    print(f"   ✅ Row {customer.get('row_number')}: General cancellation Stage {target_stage}, ready for call")
+                else:
+                    skipped_count += 1
+                    print(f"   ⏭️  Skipping row {customer.get('row_number')}: Stage mismatch (current: {stage}, needed: {target_stage})")
+            else:
+                skipped_count += 1
+                print(f"   ⏭️  Skipping row {customer.get('row_number')}: {reason}")
+        
+        elif cancellation_type == 'non_payment':
+            # For Non-Payment, check f_u_date (Follow-up Date) - use existing logic
+            followup_date_str = customer.get('f_u_date', '')
+            
+            if stage == 0 and not followup_date_str.strip():
+                skipped_count += 1
+                print(f"   ⏭️  Skipping row {customer.get('row_number')}: Stage 0 requires F/U Date")
+                continue
+            
+            followup_date = parse_date(followup_date_str)
+            if not followup_date:
+                skipped_count += 1
+                print(f"   ⏭️  Skipping row {customer.get('row_number')}: Invalid F/U Date")
+                continue
+            
+            # Check if f_u_date == today
+            if followup_date == today:
+                customers_by_type_stage['non_payment'][stage].append(customer)
+                print(f"   ✅ Row {customer.get('row_number')}: Non-Payment cancellation Stage {stage}, ready for call")
+            else:
+                skipped_count += 1
+                print(f"   ⏭️  Skipping row {customer.get('row_number')}: F/U Date ({followup_date}) is not today")
+    
+    # Flatten to old format for backward compatibility
+    customers_by_stage = {0: [], 1: [], 2: []}
+    for cancel_type in ['general', 'non_payment']:
+        for stage in [0, 1, 2]:
+            customers_by_stage[stage].extend(customers_by_type_stage[cancel_type][stage])
     
     print(f"\n📊 Summary:")
-    print(f"   Stage 0 (1st call): {len(customers_by_stage[0])} customers")
-    print(f"   Stage 1 (2nd call): {len(customers_by_stage[1])} customers")
-    print(f"   Stage 2 (3rd call): {len(customers_by_stage[2])} customers")
+    print(f"   General Cancellation:")
+    print(f"      Stage 0 (14 days before): {len(customers_by_type_stage['general'][0])} customers")
+    print(f"      Stage 1 (7 days before): {len(customers_by_type_stage['general'][1])} customers")
+    print(f"      Stage 2 (3 days before): {len(customers_by_type_stage['general'][2])} customers")
+    print(f"   Non-Payment Cancellation:")
+    print(f"      Stage 0 (14 business days before): {len(customers_by_type_stage['non_payment'][0])} customers")
+    print(f"      Stage 1 (7 business days before): {len(customers_by_type_stage['non_payment'][1])} customers")
+    print(f"      Stage 2 (1 business day before): {len(customers_by_type_stage['non_payment'][2])} customers")
     print(f"   Skipped: {skipped_count} rows")
     print(f"   Total ready: {sum(len(v) for v in customers_by_stage.values())}")
     
