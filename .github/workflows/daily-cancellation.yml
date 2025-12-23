@@ -2,14 +2,18 @@ name: Daily Cancellation Workflow
 
 on:
   schedule:
-    # Run at both UTC 18:00 and UTC 19:00 to handle daylight saving time automatically
-    # Python code will check if it's 11:00 AM Pacific time and skip if not
+    # Run at 11:00 AM and 4:00 PM Pacific time
+    # Handle daylight saving time automatically with multiple cron schedules
+    # 11:00 AM Pacific:
     # - UTC 18:00 = 11:00 AM PDT (summer, Mar-Nov) ✅
-    # - UTC 18:00 = 10:00 AM PST (winter, Nov-Mar) ❌ (will be skipped by Python)
-    # - UTC 19:00 = 12:00 PM PDT (summer, Mar-Nov) ❌ (will be skipped by Python)
     # - UTC 19:00 = 11:00 AM PST (winter, Nov-Mar) ✅
-    - cron: "0 18 * * *"  # Will execute only during PDT (summer)
-    - cron: "0 19 * * *"  # Will execute only during PST (winter)
+    # 4:00 PM Pacific:
+    # - UTC 23:00 = 4:00 PM PDT (summer, Mar-Nov) ✅
+    # - UTC 00:00 = 4:00 PM PST (winter, Nov-Mar) ✅ (next day)
+    - cron: "0 18 * * *"  # 11:00 AM PDT (summer)
+    - cron: "0 19 * * *"  # 11:00 AM PST (winter)
+    - cron: "0 23 * * *"  # 4:00 PM PDT (summer)
+    - cron: "0 0 * * *"   # 4:00 PM PST (winter, next day)
   workflow_dispatch:  # Allow manual trigger from GitHub Actions UI
 
 jobs:
