@@ -155,8 +155,24 @@ if __name__ == "__main__":
         # Get customers with empty called_times (with error handling)
         try:
             print(f"\n[{now_pacific.strftime('%H:%M:%S')}] Loading customers with empty called_times...")
+            print(f"[{now_pacific.strftime('%H:%M:%S')}] Loading all customers from Smartsheet...")
+            all_customers = smartsheet_service.get_all_customers_with_stages()
+            print(f"[{now_pacific.strftime('%H:%M:%S')}] Loaded {len(all_customers)} total customers")
+            
             customers_to_call = get_customers_with_empty_called_times(smartsheet_service)
             print(f"[{now_pacific.strftime('%H:%M:%S')}] Found {len(customers_to_call)} customers to call")
+            
+            # Debug: Show why customers might be filtered out
+            if len(customers_to_call) == 0 and len(all_customers) > 0:
+                print(f"[{now_pacific.strftime('%H:%M:%S')}] ⚠️  WARNING: Found 0 customers but {len(all_customers)} total customers exist")
+                print(f"[{now_pacific.strftime('%H:%M:%S')}] Debugging first 5 customers...")
+                for i, customer in enumerate(all_customers[:5], 1):
+                    called_times = customer.get('called_times', '') or customer.get('called_time', '') or customer.get('called time', '')
+                    done = customer.get('done?', False)
+                    recorded = customer.get('recorded_or_not', '') or customer.get('recorded or not', '')
+                    name = customer.get('insured_name_', '') or customer.get('insured_name', '') or customer.get('company', '')
+                    phone = customer.get('phone_number', '') or customer.get('contact_phone', '')
+                    print(f"   Customer {i}: called_times='{called_times}', done={done}, recorded={recorded}, name={bool(name)}, phone={bool(phone)}")
         except Exception as e:
             print(f"\n❌ Error loading customers: {e}")
             import traceback
@@ -167,16 +183,25 @@ if __name__ == "__main__":
         
         if not customers_to_call:
             no_customers_count += 1
-            print(f"\n✅ No more customers with empty called_times")
+            print(f"\n[{now_pacific.strftime('%H:%M:%S')}] ⚠️  No customers with empty called_times found")
+            print(f"[{now_pacific.strftime('%H:%M:%S')}] Attempt {no_customers_count}/{MAX_NO_CUSTOMERS}")
+            
             if no_customers_count >= MAX_NO_CUSTOMERS:
-                print(f"   No customers found after {MAX_NO_CUSTOMERS} attempts. Exiting.")
+                print(f"\n{'=' * 80}")
+                print(f"❌ EXITING: No customers found after {MAX_NO_CUSTOMERS} attempts")
+                print(f"{'=' * 80}")
+                print(f"   Total customers in sheet: {len(all_customers) if 'all_customers' in locals() else 'unknown'}")
+                print(f"   Customers to call: 0")
                 print(f"   Summary: Success={total_success}, Failed={total_failed}, Transferred={total_transferred}")
+                print(f"{'=' * 80}")
                 break
+            
             print(f"   Waiting 5 minutes before checking again... ({no_customers_count}/{MAX_NO_CUSTOMERS})")
             time.sleep(300)  # Wait 5 minutes before checking again
             continue
         else:
             no_customers_count = 0  # Reset counter when customers found
+            print(f"[{now_pacific.strftime('%H:%M:%S')}] ✅ Found {len(customers_to_call)} customers - starting calls...")
         
         # Get first customer
         customer = customers_to_call[0]
