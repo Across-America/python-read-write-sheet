@@ -31,6 +31,7 @@ MORTGAGE_BILL_2ND_REMAINDER_ASSISTANT_ID = "a7cdb965-d0b7-455b-9f43-b01e8b9580e1
 CANCELLATION_1ST_REMINDER_ASSISTANT_ID = "6e5e59f0-1a19-425c-b58e-8ad4f2a80461"  # CL1 Project - Cancellation 1st Reminder
 CANCELLATION_2ND_REMINDER_ASSISTANT_ID = "8248fab4-433b-4988-9cb3-a965227bdb00"  # CL1 Project - Cancellation 2nd Reminder
 CANCELLATION_3RD_REMINDER_ASSISTANT_ID = "845b2a4f-084f-43e7-a076-e9f130e512d9"  # CL1 Project - Cancellation 3rd Reminder
+CANCELLATION_SAME_DAY_PAST_DUE_ASSISTANT_ID = "aec4721c-360c-45b5-ba39-87320eab6fc9"  # CL1 Project - Same Day/Past Due Cancellation (status-based, one call per person per day)
 
 
 # 🏢 COMPANY CALLER ID CONFIGURATION
@@ -123,7 +124,7 @@ STM1_PHONE_NUMBER_ID = "5b2df9f4-780d-4ef6-9e01-0e55b1ba5d82"  # STM1 dedicated 
 # STM1 Configuration
 # Note: STM1 uses daily condition-based calling (not multi-stage schedule)
 # Calls are made daily based on conditions, not on a fixed schedule
-STM1_MAX_DAILY_CALLS = 500  # Maximum number of calls per day for STM1 project
+STM1_MAX_DAILY_CALLS = 10  # Maximum number of calls per day for STM1 project (temporarily set to 10 for testing)
 STM1_CALLING_START_HOUR = 9  # Start calling at 9:00 AM Pacific Time
 STM1_CALLING_END_HOUR = 17  # End calling at 5:00 PM (17:00) Pacific Time
 

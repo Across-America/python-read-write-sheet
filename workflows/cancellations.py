@@ -13,7 +13,8 @@ from config import (
     CANCELLATION_SHEET_ID,
     CANCELLATION_1ST_REMINDER_ASSISTANT_ID,
     CANCELLATION_2ND_REMINDER_ASSISTANT_ID,
-    CANCELLATION_3RD_REMINDER_ASSISTANT_ID
+    CANCELLATION_3RD_REMINDER_ASSISTANT_ID,
+    CANCELLATION_SAME_DAY_PAST_DUE_ASSISTANT_ID
 )
 import math
 import re
@@ -187,17 +188,9 @@ def should_skip_row(customer):
         if not customer.get('cancellation_date', '').strip():
             return True, "Cancellation Date is empty (required for Non-Payment cancellation)"
         
-        # Check date relationship: cancellation_date must be after f_u_date
-        f_u_date_str = customer.get('f_u_date', '').strip()
-        cancellation_date_str = customer.get('cancellation_date', '').strip()
-        
-        if f_u_date_str and cancellation_date_str:
-            f_u_date = parse_date(f_u_date_str)
-            cancellation_date = parse_date(cancellation_date_str)
-            
-            if f_u_date and cancellation_date:
-                if cancellation_date <= f_u_date:
-                    return True, f"Cancellation Date ({cancellation_date}) is not after F/U Date ({f_u_date})"
+        # Removed date relationship check: cancellation_date > f_u_date
+        # If F/U Date is today, the call must be made regardless of date relationship
+        # This allows calls for policies that are already cancelled or cancelling today
         
         return False, ""
     
@@ -541,11 +534,30 @@ def is_non_payment_cancellation_ready_for_calling(customer, today):
     return False, f"Not ready for Non-Payment cancellation call ({business_days_until} business days until cancellation)", -1
 
 
+def is_same_day_past_due_cancellation(customer):
+    """
+    Check if customer has status "Same Day/Past Due Cancellation"
+    
+    Args:
+        customer: Customer dict
+        
+    Returns:
+        bool: True if status matches, False otherwise
+    """
+    status = str(customer.get('status', '') or customer.get('Status', '')).strip()
+    if not status:
+        return False
+    
+    # Case-insensitive matching for "Same Day/Past Due Cancellation"
+    status_lower = status.lower()
+    return 'same day' in status_lower and 'past due cancellation' in status_lower
+
+
 def get_customers_ready_for_calls(smartsheet_service):
     """
     Get all customers ready for calls today based on cancellation type and stage logic
     
-    Handles two types of cancellation calls:
+    Handles three types of cancellation calls:
     1. General cancellation (UW Reason, Underwriter Declined, Unresponsive Insured, Client Requested Cancellation):
        - Uses expiration_date (or cancellation_date if expiration_date is not available - CL1 standard)
        - Calendar days: 14, 7, 3 days before expiration/cancellation
@@ -555,11 +567,17 @@ def get_customers_ready_for_calls(smartsheet_service):
        - Uses cancellation_date
        - Business days: 14, 7, 1 business days before cancellation
        - Requires amount_due
+    
+    3. Same Day/Past Due Cancellation (status-based):
+       - Based on status field only
+       - One call per person per day (checked at 11 AM and 4 PM)
+       - No stage logic, no date requirements
 
     Returns:
         dict: Customers grouped by type and stage {
             'general': {0: [...], 1: [...], 2: [...]},
-            'non_payment': {0: [...], 1: [...], 2: [...]}
+            'non_payment': {0: [...], 1: [...], 2: [...]},
+            'same_day_past_due': [...]  # Single list, no stages
         }
     """
     print("=" * 80)
@@ -576,12 +594,40 @@ def get_customers_ready_for_calls(smartsheet_service):
 
     customers_by_type_stage = {
         'general': {0: [], 1: [], 2: []},
-        'non_payment': {0: [], 1: [], 2: []}
+        'non_payment': {0: [], 1: [], 2: []},
+        'same_day_past_due': []  # Single list for status-based calls
     }
     skipped_count = 0
     
     for customer in all_customers:
-        # Initial validation
+        # Check for Same Day/Past Due Cancellation status FIRST (before other validations)
+        # This is status-based only, no other requirements
+        if is_same_day_past_due_cancellation(customer):
+            # Only check if already called today (prevent duplicate calls)
+            if was_called_today(customer, today):
+                skipped_count += 1
+                print(f"   ⏭️  Skipping row {customer.get('row_number')}: Same Day/Past Due Cancellation - Already called today")
+                continue
+            
+            # Check done checkbox
+            if customer.get('done?') in [True, 'true', 'True', 1]:
+                skipped_count += 1
+                print(f"   ⏭️  Skipping row {customer.get('row_number')}: Same Day/Past Due Cancellation - Done checkbox is checked")
+                continue
+            
+            # Check status - must not be "Paid"
+            status = str(customer.get('status', '')).strip().lower()
+            if 'paid' in status:
+                skipped_count += 1
+                print(f"   ⏭️  Skipping row {customer.get('row_number')}: Same Day/Past Due Cancellation - Status is 'Paid'")
+                continue
+            
+            # Add to same_day_past_due list (no stage logic)
+            customers_by_type_stage['same_day_past_due'].append(customer)
+            print(f"   ✅ Row {customer.get('row_number')}: Same Day/Past Due Cancellation, ready for call")
+            continue  # Skip other processing for this customer
+        
+        # Initial validation for other cancellation types
         should_skip, skip_reason = should_skip_row(customer)
         if should_skip:
             skipped_count += 1
@@ -655,6 +701,9 @@ def get_customers_ready_for_calls(smartsheet_service):
         for stage in [0, 1, 2]:
             customers_by_stage[stage].extend(customers_by_type_stage[cancel_type][stage])
     
+    # Add same_day_past_due customers to stage 0 for processing (they'll use different assistant)
+    same_day_past_due_count = len(customers_by_type_stage['same_day_past_due'])
+    
     print(f"\n📊 Summary:")
     print(f"   General Cancellation:")
     print(f"      Stage 0 (14 days before): {len(customers_by_type_stage['general'][0])} customers")
@@ -664,10 +713,14 @@ def get_customers_ready_for_calls(smartsheet_service):
     print(f"      Stage 0 (14 business days before): {len(customers_by_type_stage['non_payment'][0])} customers")
     print(f"      Stage 1 (7 business days before): {len(customers_by_type_stage['non_payment'][1])} customers")
     print(f"      Stage 2 (1 business day before): {len(customers_by_type_stage['non_payment'][2])} customers")
+    if same_day_past_due_count > 0:
+        print(f"   Same Day/Past Due Cancellation (status-based):")
+        print(f"      {same_day_past_due_count} customers")
     print(f"   Skipped: {skipped_count} rows")
-    print(f"   Total ready: {sum(len(v) for v in customers_by_stage.values())}")
+    print(f"   Total ready: {sum(len(v) for v in customers_by_stage.values()) + same_day_past_due_count}")
     
-    return customers_by_stage
+    # Return both the stage-based dict and the same_day_past_due list
+    return customers_by_stage, customers_by_type_stage['same_day_past_due']
 
 
 def format_call_entry(summary, evaluation, call_number):
@@ -678,7 +731,7 @@ def format_call_entry(summary, evaluation, call_number):
     return entry, eval_entry
 
 
-def update_after_call(smartsheet_service, customer, call_data, current_stage):
+def update_after_call(smartsheet_service, customer, call_data, current_stage, is_same_day_past_due=False):
     """
     Update Smartsheet after a successful call
     Uses the same call notes format as N1 project (renewals)
@@ -688,6 +741,7 @@ def update_after_call(smartsheet_service, customer, call_data, current_stage):
         customer: Customer dict
         call_data: Call result data from VAPI
         current_stage: Current stage (0, 1, or 2)
+        is_same_day_past_due: If True, don't increment stage (status-based, one call per day)
     """
     # Extract call analysis
     analysis = call_data.get('analysis', {})
@@ -723,10 +777,14 @@ def update_after_call(smartsheet_service, customer, call_data, current_stage):
     evaluation = str(evaluation).lower()  # Normalize to lowercase for consistency
 
     # Determine new stage
-    new_stage = current_stage + 1
-
-    # Calculate next followup date (None for stage 3)
-    next_followup_date = calculate_next_followup_date(customer, current_stage)
+    # For same_day_past_due, don't increment stage (one call per day, no stage progression)
+    if is_same_day_past_due:
+        new_stage = current_stage  # Keep at 0, don't increment
+        next_followup_date = None  # No follow-up date for status-based calls
+    else:
+        new_stage = current_stage + 1
+        # Calculate next followup date (None for stage 3)
+        next_followup_date = calculate_next_followup_date(customer, current_stage)
 
     # Format entries for appending (for ai_call_eval column - keep old format for eval)
     call_number = current_stage + 1
@@ -910,10 +968,10 @@ def run_multi_stage_batch_calling(test_mode=False, schedule_at=None, auto_confir
     smartsheet_service = SmartsheetService(sheet_id=CANCELLATION_SHEET_ID)
     vapi_service = VAPIService()
     
-    # Get customers grouped by stage
-    customers_by_stage = get_customers_ready_for_calls(smartsheet_service)
+    # Get customers grouped by stage and same_day_past_due customers
+    customers_by_stage, same_day_past_due_customers = get_customers_ready_for_calls(smartsheet_service)
     
-    total_customers = sum(len(v) for v in customers_by_stage.values())
+    total_customers = sum(len(v) for v in customers_by_stage.values()) + len(same_day_past_due_customers)
     
     if total_customers == 0:
         print("\n✅ No customers ready for calls today")
@@ -923,6 +981,15 @@ def run_multi_stage_batch_calling(test_mode=False, schedule_at=None, auto_confir
     print(f"\n{'=' * 80}")
     print(f"📊 CUSTOMERS READY FOR CALLS TODAY:")
     print(f"{'=' * 80}")
+    
+    # Show same_day_past_due customers first
+    if same_day_past_due_customers:
+        print(f"\n🔔 Same Day/Past Due Cancellation (Status-based) - {len(same_day_past_due_customers)} customers:")
+        print(f"   🤖 Assistant ID: {CANCELLATION_SAME_DAY_PAST_DUE_ASSISTANT_ID}")
+        for i, customer in enumerate(same_day_past_due_customers[:5], 1):
+            print(f"   {i}. {customer.get('company', 'Unknown')} - {customer.get('phone_number')}")
+        if len(same_day_past_due_customers) > 5:
+            print(f"   ... and {len(same_day_past_due_customers) - 5} more")
     
     for stage, customers in customers_by_stage.items():
         if customers:
@@ -955,10 +1022,77 @@ def run_multi_stage_batch_calling(test_mode=False, schedule_at=None, auto_confir
     elif auto_confirm:
         print(f"🤖 AUTO-CONFIRM: Proceeding automatically (cron mode)")
     
-    # Process each stage
+    # Process same_day_past_due customers first (status-based, one call per person)
     total_success = 0
     total_failed = 0
+    
+    if same_day_past_due_customers:
+        print(f"\n{'=' * 80}")
+        print(f"📞 CALLING SAME DAY/PAST DUE CANCELLATION - {len(same_day_past_due_customers)} customers")
+        print(f"🤖 Using Assistant: {CANCELLATION_SAME_DAY_PAST_DUE_ASSISTANT_ID}")
+        print(f"{'=' * 80}")
+        
+        if test_mode:
+            print(f"\n🧪 TEST MODE: Simulating {len(same_day_past_due_customers)} calls...")
+            for customer in same_day_past_due_customers:
+                print(f"   ✅ [SIMULATED] Would call: {customer.get('company', 'Unknown')} - {customer.get('phone_number')}")
+                total_success += 1
+        else:
+            # Batch call all same_day_past_due customers simultaneously
+            print(f"📦 Batch calling mode (simultaneous)")
+            results = vapi_service.make_batch_call_with_assistant(
+                same_day_past_due_customers,
+                CANCELLATION_SAME_DAY_PAST_DUE_ASSISTANT_ID,
+                schedule_immediately=(schedule_at is None),
+                schedule_at=schedule_at
+            )
+            
+            if results:
+                print(f"\n✅ Same Day/Past Due Cancellation batch calls completed")
+                
+                # Only update Smartsheet if calls were immediate (not scheduled)
+                if schedule_at is None:
+                    if len(results) != len(same_day_past_due_customers):
+                        print(f"   ⚠️  Warning: Results count ({len(results)}) doesn't match customers count ({len(same_day_past_due_customers)})")
+                    
+                    for i, customer in enumerate(same_day_past_due_customers):
+                        if i < len(results):
+                            call_data = results[i]
+                        else:
+                            call_data = results[0] if results else None
+                        
+                        if call_data:
+                            # Check if analysis exists, try to refresh if missing
+                            if 'analysis' not in call_data or not call_data.get('analysis'):
+                                if 'id' in call_data:
+                                    call_id = call_data['id']
+                                    try:
+                                        refreshed_data = vapi_service.check_call_status(call_id)
+                                        if refreshed_data and refreshed_data.get('analysis'):
+                                            call_data = refreshed_data
+                                    except Exception as e:
+                                        print(f"      ❌ Failed to refresh call status: {e}")
+                            
+                            # Update Smartsheet (use stage 0 for same_day_past_due, but don't increment stage)
+                            try:
+                                success = update_after_call(smartsheet_service, customer, call_data, 0, is_same_day_past_due=True)
+                                if success:
+                                    total_success += 1
+                                else:
+                                    total_failed += 1
+                            except Exception as e:
+                                print(f"   ❌ Exception updating Smartsheet: {e}")
+                                total_failed += 1
+                        else:
+                            total_failed += 1
+                else:
+                    print(f"   ⏰ Calls scheduled - Smartsheet will be updated after calls complete")
+                    total_success += len(same_day_past_due_customers)
+            else:
+                print(f"\n❌ Same Day/Past Due Cancellation batch calls failed")
+                total_failed += len(same_day_past_due_customers)
 
+    # Process each stage
     for stage in [0, 1, 2]:
         customers = customers_by_stage[stage]
 
