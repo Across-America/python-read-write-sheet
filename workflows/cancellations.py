@@ -14,7 +14,8 @@ from config import (
     CANCELLATION_1ST_REMINDER_ASSISTANT_ID,
     CANCELLATION_2ND_REMINDER_ASSISTANT_ID,
     CANCELLATION_3RD_REMINDER_ASSISTANT_ID,
-    CANCELLATION_SAME_DAY_PAST_DUE_ASSISTANT_ID
+    CANCELLATION_SAME_DAY_PAST_DUE_ASSISTANT_ID,
+    CANCELLATION_SAME_DAY_PAST_DUE_LOOKBACK_DAYS
 )
 import math
 import re
@@ -553,6 +554,64 @@ def is_same_day_past_due_cancellation(customer):
     return 'same day' in status_lower and 'past due cancellation' in status_lower
 
 
+def is_same_day_past_due_with_past_fu_date(customer, today):
+    """
+    Check if customer has status "Same Day/Past Due Cancellation" AND
+    f/u_date is within past N days AND no calls have been made (safety net)
+    
+    This is a double-check mechanism to ensure customers don't get missed.
+    
+    Args:
+        customer: Customer dict
+        today: Current date (date object)
+        
+    Returns:
+        tuple: (is_match: bool, reason: str)
+    """
+    # First check status
+    if not is_same_day_past_due_cancellation(customer):
+        return False, ""
+    
+    # Check f/u_date
+    followup_date_str = customer.get('f_u_date', '')
+    if not followup_date_str.strip():
+        return False, "No F/U Date"
+    
+    followup_date = parse_date(followup_date_str)
+    if not followup_date:
+        return False, "Invalid F/U Date"
+    
+    # Check if f/u_date is in the past (within lookback window)
+    days_ago = (today - followup_date).days
+    if days_ago < 0:
+        # f/u_date is in the future
+        return False, f"F/U Date is in the future"
+    
+    if days_ago > CANCELLATION_SAME_DAY_PAST_DUE_LOOKBACK_DAYS:
+        # f/u_date is too far in the past
+        return False, f"F/U Date is too old ({days_ago} days ago, max {CANCELLATION_SAME_DAY_PAST_DUE_LOOKBACK_DAYS} days)"
+    
+    # Check if any calls have been made
+    stage = get_call_stage(customer)
+    ai_call_summary = customer.get('ai_call_summary', '') or ''
+    
+    # If stage > 0 or has call summary, calls have been made
+    if stage > 0:
+        return False, f"Already called (stage {stage})"
+    
+    if ai_call_summary and ai_call_summary.strip():
+        # Has call summary, check if there are any calls
+        # Simple check: if summary exists and is not empty, assume calls were made
+        # More precise: check for "Call Placed At" pattern
+        pattern = r'Call Placed At:\s*(\d{4}-\d{2}-\d{2})'
+        matches = re.findall(pattern, ai_call_summary)
+        if matches:
+            return False, f"Already has {len(matches)} call(s) in summary"
+    
+    # All conditions met: status matches, f/u_date is within past N days, no calls made
+    return True, f"F/U Date was {days_ago} days ago, no calls made (safety net)"
+
+
 def get_customers_ready_for_calls(smartsheet_service):
     """
     Get all customers ready for calls today based on cancellation type and stage logic
@@ -601,8 +660,25 @@ def get_customers_ready_for_calls(smartsheet_service):
     
     for customer in all_customers:
         # Check for Same Day/Past Due Cancellation status FIRST (before other validations)
-        # This is status-based only, no other requirements
+        # Two ways to match:
+        # 1. Status-based only (primary method)
+        # 2. Status + f/u_date in past N days + no calls made (safety net)
+        is_same_day_past_due = False
+        match_reason = ""
+        
+        # Primary method: status-based only
         if is_same_day_past_due_cancellation(customer):
+            is_same_day_past_due = True
+            match_reason = "Status-based"
+        
+        # Safety net: status + f/u_date in past + no calls
+        if not is_same_day_past_due:
+            is_match, reason = is_same_day_past_due_with_past_fu_date(customer, today)
+            if is_match:
+                is_same_day_past_due = True
+                match_reason = f"Safety net ({reason})"
+        
+        if is_same_day_past_due:
             # Only check if already called today (prevent duplicate calls)
             if was_called_today(customer, today):
                 skipped_count += 1
@@ -616,7 +692,7 @@ def get_customers_ready_for_calls(smartsheet_service):
                 continue
             
             # Check status - must not be "Paid"
-            status = str(customer.get('status', '')).strip().lower()
+            status = str(customer.get('status', '') or customer.get('Status', '')).strip().lower()
             if 'paid' in status:
                 skipped_count += 1
                 print(f"   ⏭️  Skipping row {customer.get('row_number')}: Same Day/Past Due Cancellation - Status is 'Paid'")
@@ -624,7 +700,7 @@ def get_customers_ready_for_calls(smartsheet_service):
             
             # Add to same_day_past_due list (no stage logic)
             customers_by_type_stage['same_day_past_due'].append(customer)
-            print(f"   ✅ Row {customer.get('row_number')}: Same Day/Past Due Cancellation, ready for call")
+            print(f"   ✅ Row {customer.get('row_number')}: Same Day/Past Due Cancellation, ready for call ({match_reason})")
             continue  # Skip other processing for this customer
         
         # Initial validation for other cancellation types

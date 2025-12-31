@@ -33,6 +33,10 @@ CANCELLATION_2ND_REMINDER_ASSISTANT_ID = "8248fab4-433b-4988-9cb3-a965227bdb00" 
 CANCELLATION_3RD_REMINDER_ASSISTANT_ID = "845b2a4f-084f-43e7-a076-e9f130e512d9"  # CL1 Project - Cancellation 3rd Reminder
 CANCELLATION_SAME_DAY_PAST_DUE_ASSISTANT_ID = "aec4721c-360c-45b5-ba39-87320eab6fc9"  # CL1 Project - Same Day/Past Due Cancellation (status-based, one call per person per day)
 
+# CL1 Project - Same Day/Past Due Cancellation Safety Net Configuration
+# If f/u_date is within past N days and no calls made, also trigger calling
+CANCELLATION_SAME_DAY_PAST_DUE_LOOKBACK_DAYS = 7  # Check f/u_date within past 7 days as safety net
+
 
 # 🏢 COMPANY CALLER ID CONFIGURATION
 # Requirement: The company number +1 (951) 247-2003 must be displayed
