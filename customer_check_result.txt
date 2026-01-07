@@ -1,0 +1,37 @@
+================================================================================
+CUSTOMER CHECK RESULT
+================================================================================
+
+Loading service...
+Finding customers with empty called_times...
+
+RESULT: Found 2167 customers
+
+First 20 customers:
+  1. Row 185: Oak Truck Lines LLC | Phone: 956-744-5833 | Called_times: 0
+  2. Row 186: Maverick Express Carriers LLC | Phone: 830-294-5322 | Called_times: 0
+  3. Row 187: Maverick Express Carriers LLC | Phone: 956-977-5984 | Called_times: 0
+  4. Row 188: Reveille Trucking Inc | Phone: 956-730-4606 | Called_times: 0
+  5. Row 189: GT Transport Inc | Phone: 956-282-4128 | Called_times: 0
+  6. Row 190: Oak Truck Lines LLC | Phone: 956-282-1844 | Called_times: 0
+  7. Row 191: PG Specialized Carriers LLC | Phone: 956-333-6009 | Called_times: 0
+  8. Row 192: CP3 Transport Services LLC | Phone: 956-731-9077 | Called_times: 0
+  9. Row 193: PG Specialized Carriers LLC | Phone: 956-691-2308 | Called_times: 0
+  10. Row 194: Kal Freight Inc | Phone: 909-213-4423 | Called_times: 0
+  11. Row 195: Oak Truck Lines LLC | Phone: 956-333-2644 | Called_times: 0
+  12. Row 196: G&I Logistics LLC | Phone: 956-866-9066 | Called_times: 0
+  13. Row 197: Interlogix LLC | Phone: 915-284-0097 | Called_times: 0
+  14. Row 198: Select Dedicated Solutions LLC | Phone: 254-479-3711 | Called_times: 0
+  15. Row 199: Zaro Transportation LLC | Phone: 956-526-0065 | Called_times: 0
+  16. Row 200: El Shaddai Transportation LLC | Phone: 915-831-9071 | Called_times: 0
+  17. Row 201: Kal Freight Inc | Phone: 612-245-5393 | Called_times: 0
+  18. Row 202: Maverick Express Carriers LLC | Phone: 552-752-9867 | Called_times: 0
+  19. Row 203: Select Dedicated Solutions LLC | Phone: 956-803-6211 | Called_times: 0
+  20. Row 206: Guicho's Trucking LLC | Phone: 956-307-7029 | Called_times: 0
+
+Last 5 customers:
+  2163. Row 2751: WL Trucking LLC | Phone: 626-501-8669
+  2164. Row 2752: Khera Transport LLC | Phone: 323-684-4297
+  2165. Row 2753: Khera Transport LLC | Phone: 323-684-4297
+  2166. Row 2754: Toroco Trucking LLC DBA Transportes Toro | Phone: 663-104-1105
+  2167. Row 2755: EBT Logistics Inc | Phone: 866-140-7102

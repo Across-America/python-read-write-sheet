@@ -205,14 +205,16 @@ Examples:
         now_pacific = datetime.now(pacific_tz)
         
         # Renewal workflow runs at 11:00 AM and 4:00 PM Pacific time
-        target_hours = [11, 16]  # 11:00 AM and 4:00 PM
-        target_time_str = "11:00 AM or 4:00 PM"
+        # Use a time window to handle DST and GitHub Actions delays:
+        # - Morning: 10:00 AM - 12:59 PM (covers 10 AM, 11 AM, 12 PM)
+        # - Afternoon: 3:00 PM - 5:59 PM (covers 3 PM, 4 PM, 5 PM)
+        morning_window = (10 <= now_pacific.hour <= 12)
+        afternoon_window = (15 <= now_pacific.hour <= 17)
         
-        # Only check hour, not minutes - this allows for GitHub Actions delays
-        if now_pacific.hour not in target_hours:
+        if not (morning_window or afternoon_window):
             print("=" * 80)
-            print(f"⏭️  Skipping: Current Pacific time is {now_pacific.strftime('%I:%M %p')}, not {target_time_str}")
-            print(f"   This is expected due to daylight saving time handling")
+            print(f"⏭️  Skipping: Current Pacific time is {now_pacific.strftime('%I:%M %p')}")
+            print(f"   Expected time window: 10:00 AM - 12:59 PM or 3:00 PM - 5:59 PM")
             print("=" * 80)
             return
         
@@ -229,8 +231,20 @@ Examples:
     print(f"Year: {year}, Month: {month}")
     if is_manual_trigger:
         print("🖱️  Manual trigger detected - skipping time check")
+    
+    # Explicitly show mode
     if args.test:
         print("🧪 TEST MODE - No actual calls or updates will be made")
+    else:
+        print("📞 PRODUCTION MODE - Will make actual phone calls")
+        # Verify VAPI API key is set
+        vapi_key = os.getenv('VAPI_API_KEY')
+        if not vapi_key:
+            print("❌ ERROR: VAPI_API_KEY environment variable is not set!")
+            print("   Cannot make calls without VAPI API key")
+            return False
+        else:
+            print(f"✅ VAPI API key is configured (length: {len(vapi_key)} characters)")
     print("=" * 80)
     print()
     

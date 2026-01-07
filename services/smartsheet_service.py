@@ -322,12 +322,26 @@ class SmartsheetService:
             customers = []
 
             # Process all rows using pre-built column map
+            # Note: sheet.rows order may vary, so we'll sort by row_number later if needed
             for row in sheet.rows:
                 customer = self._extract_all_row_data(row, id_map)
                 if customer:
                     customers.append(customer)
 
             print(f"✅ Loaded {len(customers)} customer records")
+            
+            # Sort by row_number to ensure consistent order (ascending)
+            def get_row_number(customer):
+                row_num = customer.get('row_number', 0)
+                if row_num is None:
+                    return 0
+                try:
+                    return int(row_num)
+                except (ValueError, TypeError):
+                    return 0
+            
+            customers.sort(key=get_row_number)
+            
             return customers
 
         except Exception as e:

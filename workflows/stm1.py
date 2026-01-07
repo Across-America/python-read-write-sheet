@@ -8,6 +8,15 @@ Calls are made daily based on conditions (not on a fixed multi-stage schedule).
 Uses the "Insured Driver Statement" sheet in the "AACS" workspace.
 """
 
+import sys
+import os
+
+# Fix Windows encoding issue
+if sys.platform == 'win32':
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+
 from datetime import datetime, timedelta, date
 from zoneinfo import ZoneInfo
 from services import VAPIService, SmartsheetService
@@ -144,6 +153,16 @@ def should_skip_stm1_row(customer):
     phone_field = customer.get('phone_number', '') or customer.get('contact_phone', '') or customer.get('client_phone_number', '')
     if not phone_field.strip():
         return True, "Phone number is empty"
+    
+    # Skip phone numbers starting with 52 (Mexico country code)
+    # Only skip if it's actually a Mexico number (starts with +52 or 52 with more than 10 digits)
+    # Don't skip US numbers that happen to start with 52 (like area code 552)
+    phone_cleaned = phone_field.strip().replace(" ", "").replace("-", "").replace("(", "").replace(")", "").replace(".", "").replace("/", "")
+    if phone_cleaned.startswith('+52'):
+        return True, "Phone number starts with +52 (Mexico) - skipping"
+    # If it starts with 52 but has more than 10 digits, it's likely a Mexico number
+    if phone_cleaned.startswith('52') and len(phone_cleaned) > 10:
+        return True, "Phone number starts with 52 (Mexico) - skipping"
 
     # Note: Insured Driver Statement sheet doesn't have due_date column
     # So we skip the due_date check for this sheet
@@ -164,15 +183,37 @@ def should_skip_stm1_row(customer):
 def get_stm1_last_call_date(customer):
     """
     Get the last call date for a customer
+    Since STM1 sheet doesn't have last_call_made_date column,
+    we extract it from call_notes which contains "Call Placed At: YYYY-MM-DD HH:MM:SS"
     
     Returns:
         date or None: Last call date if available, None otherwise
     """
+    # First try last_call_made_date column (if it exists in future)
     last_call_date_str = customer.get('last_call_made_date', '') or customer.get('last_call_date', '')
-    if not last_call_date_str:
-        return None
+    if last_call_date_str:
+        parsed = parse_date(last_call_date_str)
+        if parsed:
+            return parsed
     
-    return parse_date(last_call_date_str)
+    # Extract from call_notes if available
+    # Format: "Call Placed At: 2025-12-17 15:15:20\n..."
+    call_notes = customer.get('call_notes', '') or customer.get('stm1_call_notes', '')
+    if call_notes:
+        # Look for "Call Placed At: YYYY-MM-DD" pattern
+        import re
+        # Find the most recent call date in call_notes
+        # Pattern: "Call Placed At: YYYY-MM-DD"
+        pattern = r'Call Placed At:\s*(\d{4}-\d{2}-\d{2})'
+        matches = re.findall(pattern, call_notes)
+        if matches:
+            # Get the last (most recent) match
+            last_date_str = matches[-1]
+            parsed = parse_date(last_date_str)
+            if parsed:
+                return parsed
+    
+    return None
 
 
 # ========================================
@@ -280,6 +321,19 @@ def get_stm1_customers_ready_for_calls(smartsheet_service):
         
         ready_customers.append(customer)
         print(f"   ✅ Row {customer.get('row_number')}: Ready for STM1 call today")
+    
+    # Sort by row number (ascending) to call from the beginning
+    # Ensure row_number is converted to int for proper sorting
+    def get_row_number(customer):
+        row_num = customer.get('row_number', 0)
+        if row_num is None:
+            return 0
+        try:
+            return int(row_num)
+        except (ValueError, TypeError):
+            return 0
+    
+    ready_customers.sort(key=get_row_number)
     
     print(f"\n📊 Summary:")
     print(f"   Ready for calls: {len(ready_customers)} customers")
@@ -499,7 +553,9 @@ Was Voicemail Left: {was_voicemail_left}
     
     updates = {
         'call_notes': new_call_notes,  # Store formatted call notes (same format as CL1 and N1)
-        'last_call_made_date': last_call_date_str,  # Record last call date (used to prevent duplicate calls same day)
+        # Note: STM1 sheet doesn't have last_call_made_date column, so we skip it
+        # The call date is stored in call_notes as "Call Placed At: YYYY-MM-DD HH:MM:SS"
+        # 'last_call_made_date': last_call_date_str,  # Skipped - column doesn't exist in STM1 sheet
         'called_times': str(called_time_count),  # Update call count (increment by 1) - use plural to match sheet
         'transferred_to_aacs_or_not': was_transferred,  # Record if call was transferred (Yes/No) - matches existing column
         'transfer': was_transferred,  # Alternative column name for transfer status
@@ -513,7 +569,7 @@ Was Voicemail Left: {was_voicemail_left}
     if success:
         print(f"✅ Smartsheet updated successfully")
         print(f"   • Call Notes: Updated with formatted call notes (same format as CL1/N1)")
-        print(f"   • Last Call Made Date: {last_call_date_str}")
+        print(f"   • Call Date in Notes: {call_placed_at} (stored in call_notes)")
         print(f"   • Called Times: Updated to {called_time_count} (incremented from {called_time_count - 1})")
         print(f"   • Transfer Status: {was_transferred} (endedReason: {ended_reason})")
         print(f"   • transferred_to_aacs_or_not column: Updated to '{was_transferred}'")
@@ -732,14 +788,11 @@ def run_stm1_batch_calling(test_mode=False, schedule_at=None, auto_confirm=False
         print("\n✅ No STM1 customers ready for calls today")
         return True
     
-    # Apply daily call limit
-    if STM1_MAX_DAILY_CALLS and total_customers > STM1_MAX_DAILY_CALLS:
-        print(f"\n⚠️  Daily call limit applied: {total_customers} ready customers limited to {STM1_MAX_DAILY_CALLS} calls")
-        ready_customers = ready_customers[:STM1_MAX_DAILY_CALLS]
-        total_customers = len(ready_customers)
-        print(f"📊 Processing first {total_customers} customers (remaining will be processed on subsequent days)")
-    else:
-        print(f"\n📊 All {total_customers} ready customers will be processed today")
+    # Note: No daily call limit - will continue calling until 4:30 PM
+    # The loop will continuously fetch new customers with called_times = 0 or empty
+    print(f"\n📊 Found {total_customers} ready customers initially")
+    print(f"   Will continue calling until 4:30 PM Pacific Time")
+    print(f"   Only customers with called_times = 0 or empty will be called")
     
     # Show summary and ask for confirmation
     print(f"\n{'=' * 80}")
@@ -777,11 +830,18 @@ def run_stm1_batch_calling(test_mode=False, schedule_at=None, auto_confirm=False
     # Process all ready customers
     total_success = 0
     total_failed = 0
+    
+    # Set end time to 4:30 PM Pacific Time
+    pacific_tz = ZoneInfo("America/Los_Angeles")
+    end_time_hour = 16  # 4 PM
+    end_time_minute = 30  # 30 minutes
 
     print(f"\n{'=' * 80}")
-    print(f"📞 STM1 CALLING - {total_customers} customers")
+    print(f"📞 STM1 CONTINUOUS CALLING")
     print(f"🤖 Using Assistant: {STM1_ASSISTANT_ID}")
     print(f"📱 Using Phone Number ID: {STM1_PHONE_NUMBER_ID}")
+    print(f"⏰ Will continue calling until {end_time_hour}:{end_time_minute:02d} PM Pacific Time")
+    print(f"📋 Only customers with called_times = 0 or empty will be called")
     print(f"{'=' * 80}")
 
     if test_mode:
@@ -793,89 +853,219 @@ def run_stm1_batch_calling(test_mode=False, schedule_at=None, auto_confirm=False
             print(f"   ✅ [SIMULATED] Would call: {company} - {phone}")
             total_success += 1
     else:
-        # Batch calling (all customers simultaneously)
-        print(f"📦 Batch calling mode (simultaneous)")
-        # Validate customers before calling
-        validated_customers = []
-        for customer in ready_customers:
+        # Sequential calling (one customer at a time) - Continue until 4:30 PM
+        print(f"🔄 Sequential calling mode (one at a time)")
+        print(f"⏰ Will continue calling until {end_time_hour}:{end_time_minute:02d} PM Pacific Time")
+        
+        import time
+        call_count = 0
+        
+        # Continue calling in a loop until 4:30 PM
+        while True:
+            # Check time before each iteration
+            now_pacific = datetime.now(pacific_tz)
+            current_hour = now_pacific.hour
+            current_minute = now_pacific.minute
+            
+            # Stop if we've reached 4:30 PM
+            if current_hour > end_time_hour or (current_hour == end_time_hour and current_minute >= end_time_minute):
+                print(f"\n⏰ REACHED END TIME - Stopping calls")
+                print(f"   Current time: {now_pacific.strftime('%I:%M %p %Z')}")
+                print(f"   End time: {end_time_hour}:{end_time_minute:02d} PM Pacific Time")
+                print(f"   Total calls made: {call_count}")
+                break
+            
+            # Get fresh list of ready customers (only those with called_times = 0 or empty)
+            ready_customers = get_stm1_customers_ready_for_calls(smartsheet_service)
+            
+            if not ready_customers:
+                print(f"\n⏸️  No more customers ready for calls. Waiting 30 seconds before checking again...")
+                time.sleep(30)
+                continue
+            
+            # Process customers one by one
+            for customer in ready_customers:
+                # Check time before each call
+                now_pacific = datetime.now(pacific_tz)
+                current_hour = now_pacific.hour
+                current_minute = now_pacific.minute
+                
+                # Stop if we've reached 4:30 PM
+                if current_hour > end_time_hour or (current_hour == end_time_hour and current_minute >= end_time_minute):
+                    print(f"\n⏰ REACHED END TIME - Stopping calls")
+                    print(f"   Current time: {now_pacific.strftime('%I:%M %p %Z')}")
+                    print(f"   End time: {end_time_hour}:{end_time_minute:02d} PM Pacific Time")
+                    print(f"   Total calls made: {call_count}")
+                    break
+                
+                call_count += 1
+            
+                company = customer.get('company', 'Unknown') or customer.get('insured_name', 'Unknown')
+                phone = customer.get('phone_number', '') or customer.get('contact_phone', '')
+                row_num = customer.get('row_number', call_count)
+                
+                print(f"\n{'=' * 80}")
+                print(f"📞 Call #{call_count}: Row {row_num} - {company}")
+                print(f"   Phone: {phone}")
+                print(f"   Time: {now_pacific.strftime('%I:%M %p %Z')} (End time: {end_time_hour}:{end_time_minute:02d} PM)")
+                print(f"{'=' * 80}")
+            
+            # Validate customer before calling
             is_valid, error_msg, validated_data = validate_stm1_customer_data(customer)
-            if is_valid:
-                customer_for_call = {**customer, **validated_data}
-                validated_customers.append(customer_for_call)
-            else:
+            if not is_valid:
                 error_logger.log_validation_failure(customer, error_msg)
                 error_logger.log_warning(customer, 0, 'VALIDATION_FAILED', error_msg)
+                print(f"   ❌ Validation failed: {error_msg}")
                 total_failed += 1
-        
-        if not validated_customers:
-            print(f"\n⚠️  No valid customers after validation")
-        else:
+                continue
+            
+            # Merge validated data into customer
+            customer_for_call = {**customer, **validated_data}
+            
             try:
-                # Use STM1-specific variable builder for VAPI assistant
+                # Make single call (one customer at a time)
+                print(f"   🚀 Initiating call...")
                 results = vapi_service.make_batch_call_with_assistant(
-                    validated_customers,
+                    [customer_for_call],  # Only one customer at a time
                     STM1_ASSISTANT_ID,
                     schedule_immediately=(schedule_at is None),
                     schedule_at=schedule_at,
-                    custom_variable_builder=build_stm1_variable_values
+                    custom_variable_builder=build_stm1_variable_values,
+                    skip_wait=True  # Skip waiting for faster sequential calling
                 )
-
-                if results:
-                    print(f"\n✅ STM1 batch calls completed")
-                    print(f"   📊 Received {len(results)} call result(s) for {len(validated_customers)} customer(s)")
-
+                
+                if results and results[0]:
+                    call_data = results[0]
+                    
                     # Only update Smartsheet if calls were immediate (not scheduled)
                     if schedule_at is None:
-                        for i, customer in enumerate(validated_customers):
-                            if i < len(results):
-                                call_data = results[i]
-                            else:
-                                call_data = results[0] if results else None
-                            
-                            if call_data:
-                                if 'analysis' not in call_data or not call_data.get('analysis'):
-                                    company = customer.get('company', 'Unknown') or customer.get('insured_name', 'Unknown')
-                                    print(f"   ⚠️  Customer {i+1} ({company}): No analysis in call_data")
-                                    if 'id' in call_data:
-                                        call_id = call_data['id']
-                                        try:
-                                            refreshed_data = vapi_service.check_call_status(call_id)
-                                            if refreshed_data and refreshed_data.get('analysis'):
-                                                call_data = refreshed_data
-                                                print(f"      ✅ Successfully retrieved analysis from refreshed call status")
-                                        except Exception as e:
-                                            print(f"      ❌ Failed to refresh call status: {e}")
-                                
-                                try:
-                                    success = update_after_stm1_call(smartsheet_service, customer, call_data)
-                                    if success:
-                                        total_success += 1
-                                    else:
-                                        error_logger.log_error(customer, 0, 'SMARTSHEET_UPDATE_FAILED', "Failed to update Smartsheet after call")
-                                        total_failed += 1
-                                except Exception as e:
-                                    error_logger.log_error(customer, 0, 'SMARTSHEET_UPDATE_ERROR', f"Exception during Smartsheet update: {e}", e)
+                        # Wait longer for call to complete (since we're using skip_wait)
+                        # Give it more time to finish
+                        time.sleep(10)
+                        
+                        # Try to get call status if we have a call ID
+                        if 'id' in call_data:
+                            call_id = call_data['id']
+                            try:
+                                # Check call status multiple times until it's ended or timeout
+                                max_checks = 6  # Check up to 6 times (30 seconds total)
+                                for check_num in range(max_checks):
+                                    refreshed_data = vapi_service.check_call_status(call_id)
+                                    if refreshed_data:
+                                        call_data = refreshed_data
+                                        call_status = refreshed_data.get('status', '')
+                                        if call_status == 'ended':
+                                            print(f"      ✅ Call completed (status: {call_status})")
+                                            break
+                                        elif check_num < max_checks - 1:
+                                            print(f"      ⏳ Call still in progress (status: {call_status}), waiting...")
+                                            time.sleep(5)
+                            except Exception as e:
+                                print(f"      ⚠️  Could not refresh call status: {e}")
+                        
+                        # Check if call was successfully dialed (regardless of whether customer answered)
+                        call_status = call_data.get('status', '')
+                        ended_reason = call_data.get('endedReason', '')
+                        analysis = call_data.get('analysis', {})
+                        
+                        # Define system failure reasons that should not have call notes
+                        # These are technical failures, not customer-related outcomes
+                        system_failure_reasons = [
+                            'assistant-error',
+                            'twilio-failed-to-connect-call'
+                        ]
+                        
+                        # Check if call was successfully dialed
+                        # Success criteria:
+                        # 1. Status is 'ended' (call completed/attempted)
+                        # 2. Not a system failure reason
+                        # Note: Customer-related outcomes (busy, no answer, voicemail, etc.) are considered successful dials
+                        is_successful_dial = (
+                            call_status == 'ended' and
+                            ended_reason not in system_failure_reasons
+                        )
+                        
+                        # If call is still in progress (not ended), don't update call notes
+                        if call_status != 'ended':
+                            is_successful_dial = False
+                            print(f"      ⚠️  Call still in progress (status: {call_status}) - will not update call notes")
+                        
+                        if is_successful_dial:
+                            # Call was successfully dialed (regardless of customer response)
+                            # Update call notes for all successful dials (including busy, no answer, voicemail, etc.)
+                            try:
+                                success = update_after_stm1_call(smartsheet_service, customer_for_call, call_data)
+                                if success:
+                                    print(f"   ✅ Call #{call_count} successfully dialed (reason: {ended_reason}) - Call notes updated")
+                                    total_success += 1
+                                else:
+                                    error_logger.log_error(customer_for_call, 0, 'SMARTSHEET_UPDATE_FAILED', "Failed to update Smartsheet after call")
+                                    print(f"   ⚠️  Call #{call_count} completed but Smartsheet update failed")
                                     total_failed += 1
+                            except Exception as e:
+                                error_logger.log_error(customer_for_call, 0, 'SMARTSHEET_UPDATE_ERROR', f"Exception during Smartsheet update: {e}", e)
+                                print(f"   ❌ Call #{call_count} Smartsheet update error: {e}")
+                                total_failed += 1
+                        else:
+                            # Call failed due to system error or still in progress - only update called_times, not call notes
+                            if call_status != 'ended':
+                                print(f"   ⚠️  Call #{call_count} still in progress (status: {call_status}) - Skipping call notes, only updating called_times")
                             else:
-                                error_logger.log_error(customer, 0, 'VAPI_CALL_FAILED', "VAPI call returned no data")
+                                print(f"   ⚠️  Call #{call_count} failed due to system error (status: {call_status}, reason: {ended_reason})")
+                                print(f"      Skipping call notes update - only updating called_times")
+                            
+                            # Update only called_times counter
+                            current_called_time = customer_for_call.get('called_times', '') or customer_for_call.get('called_time', '') or '0'
+                            try:
+                                called_time_count = int(str(current_called_time).strip()) if str(current_called_time).strip() else 0
+                            except (ValueError, TypeError):
+                                called_time_count = 0
+                            called_time_count += 1
+                            
+                            updates = {
+                                'called_times': str(called_time_count),
+                            }
+                            
+                            try:
+                                update_success = smartsheet_service.update_customer_fields(customer_for_call, updates)
+                                if update_success:
+                                    print(f"      ✅ Updated called_times to {called_time_count} (no call notes added)")
+                                    total_success += 1
+                                else:
+                                    print(f"      ❌ Failed to update called_times")
+                                    total_failed += 1
+                            except Exception as e:
+                                print(f"      ❌ Error updating called_times: {e}")
                                 total_failed += 1
                     else:
-                        print(f"   ⏰ Calls scheduled - Smartsheet will be updated after calls complete")
-                        total_success += len(validated_customers)
+                        print(f"   ⏰ Call #{call_count} scheduled - Smartsheet will be updated after call completes")
+                        total_success += 1
                 else:
-                    print(f"\n❌ STM1 batch calls failed")
-                    for customer in validated_customers:
-                        error_logger.log_error(customer, 0, 'VAPI_CALL_FAILED', "VAPI API returned no results")
-                    total_failed += len(validated_customers)
+                    error_logger.log_error(customer_for_call, 0, 'VAPI_CALL_FAILED', "VAPI API returned no results")
+                    print(f"   ❌ Call #{call_count} failed - no results from VAPI")
+                    total_failed += 1
+                    
             except Exception as e:
-                print(f"\n❌ STM1 batch calls failed with exception")
-                for customer in validated_customers:
-                    error_logger.log_error(customer, 0, 'VAPI_CALL_EXCEPTION', f"Exception during VAPI call: {e}", e)
-                total_failed += len(validated_customers)
+                error_logger.log_error(customer_for_call, 0, 'VAPI_CALL_EXCEPTION', f"Exception during VAPI call: {e}", e)
+                print(f"   ❌ Call #{call_count} exception: {e}")
+                total_failed += 1
+            
+                # Small delay between calls
+                time.sleep(1)
+                
+                # Check if we should continue (break inner loop to get fresh customer list)
+                now_pacific = datetime.now(pacific_tz)
+                if now_pacific.hour > end_time_hour or (now_pacific.hour == end_time_hour and now_pacific.minute >= end_time_minute):
+                    break
+            
+            # Break outer loop if we've reached end time
+            now_pacific = datetime.now(pacific_tz)
+            if now_pacific.hour > end_time_hour or (now_pacific.hour == end_time_hour and now_pacific.minute >= end_time_minute):
+                break
     
     # Final summary
     print(f"\n{'=' * 80}")
-    print(f"🏁 STM1 BATCH CALLING COMPLETE")
+    print(f"🏁 STM1 CALLING COMPLETE")
     print(f"{'=' * 80}")
     print(f"   ✅ Successful: {total_success}")
     print(f"   ❌ Failed: {total_failed}")
@@ -898,6 +1088,8 @@ if __name__ == "__main__":
 
     # Check if test mode is requested
     test_mode = "--test" in sys.argv or "-t" in sys.argv
+    # Check if auto confirm is requested
+    auto_confirm = "--auto-confirm" in sys.argv or "--yes" in sys.argv or "-y" in sys.argv
 
-    run_stm1_batch_calling(test_mode=test_mode)
+    run_stm1_batch_calling(test_mode=test_mode, auto_confirm=auto_confirm)
 

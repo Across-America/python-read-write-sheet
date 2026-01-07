@@ -14,6 +14,14 @@ def build_stm1_variable_values(customer):
     - Date of Loss: (to be determined from sheet)
     - Preferred Language: (to be determined from sheet)
     
+    Also provides formatted driver information for AACS employee announcement:
+    - DRIVER_INFO_FOR_AACS: Driver name and claim number only (as requested for AACS agents)
+    - DRIVER_INFO_SHORT: Same as DRIVER_INFO_FOR_AACS (driver name and claim number)
+    
+    These variables can be used in the VAPI assistant prompt to announce driver information
+    to AACS employees when the call is transferred. For example, in the transfer message:
+    "I'm transferring you now. {{DRIVER_INFO_FOR_AACS}}"
+    
     Args:
         customer: Customer dict from STM1 sheet
         
@@ -37,6 +45,23 @@ def build_stm1_variable_values(customer):
     date_of_loss = customer.get('date_of_loss', '')
     preferred_language = customer.get('language', '') or customer.get('preferred_language', '') or 'English'
     
+    # Build formatted driver information for AACS employee announcement
+    # This will be used by the AI to tell AACS employees about the driver when they answer the call
+    # Only includes: Driver name and Claim number (as requested)
+    driver_info_parts = []
+    
+    if insured_driver_name:
+        driver_info_parts.append(f"Driver name: {insured_driver_name}")
+    
+    if claim_number:
+        driver_info_parts.append(f"Claim number: {claim_number}")
+    
+    # Combine into a natural language string
+    driver_info_for_aacs = ". ".join(driver_info_parts) if driver_info_parts else "Driver information not available"
+    
+    # Short version (same as full version since we only need driver name and claim number)
+    driver_info_short = driver_info_for_aacs
+    
     # Build variable values matching VAPI assistant prompt variable names
     # The prompt uses variables like: {{INSURED_DRIVER_STATEMENT_CLAIM_NUMBER_COLUMN_ID}}
     # We provide both the exact variable name from prompt and friendly alternatives
@@ -49,6 +74,18 @@ def build_stm1_variable_values(customer):
         "INSURED_DRIVER_STATEMENT_PHONE_NUMBER_COLUMN_ID": phone_number,
         "INSURED_DRIVER_STATEMENT_DATE_OF_LOSS_COLUMN_ID": date_of_loss,
         "INSURED_DRIVER_STATEMENT_LANGUAGE_COLUMN_ID": preferred_language,
+        
+        # Driver information for AACS employee announcement (when call is transferred)
+        "DRIVER_INFO_FOR_AACS": driver_info_for_aacs,
+        "driver_info_for_aacs": driver_info_for_aacs,
+        "Driver_Info_For_AACS": driver_info_for_aacs,
+        "AACS_DRIVER_INFO": driver_info_for_aacs,
+        "aacs_driver_info": driver_info_for_aacs,
+        
+        # Short version for quick announcement
+        "DRIVER_INFO_SHORT": driver_info_short,
+        "driver_info_short": driver_info_short,
+        "Driver_Info_Short": driver_info_short,
         
         # Friendly variable names (alternative formats for compatibility)
         "Claim_Number": claim_number,

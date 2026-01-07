@@ -287,25 +287,30 @@ class VAPIService:
                     for i, call_id in enumerate(call_ids, 1):
                         print(f"   Call {i}: {call_id}")
                     
-                    # Monitor the first call
-                    print(f"\n📡 Monitoring first call for summary...")
-                    call_data = self.wait_for_call_completion(call_ids[0])
-                    
-                    if call_data:
-                        self._display_call_results(call_data)
+                    # Monitor the first call (skip if skip_wait=True for faster calling)
+                    if skip_wait:
+                        print(f"\n⚡ Skipping wait - returning immediately for faster calling")
+                        # Just get initial call status without waiting
+                        call_data = self.check_call_status(call_ids[0])
+                        if call_data:
+                            return [call_data]  # Return as list for consistency with other workflows
+                        else:
+                            # Return minimal call data with just the ID
+                            return [{
+                                'id': call_ids[0],
+                                'status': 'initiated'
+                            }]
+                    else:
+                        print(f"\n📡 Monitoring first call for summary...")
+                        call_data = self.wait_for_call_completion(call_ids[0])
                         
-                        return {
-                            'success': True,
-                            'call_ids': call_ids,
-                            'call_data': call_data,
-                            'result': result
-                        }
+                        if call_data:
+                            self._display_call_results(call_data)
+                            # Return as list for consistency
+                            return [call_data]
                 
-                return {
-                    'success': True,
-                    'call_ids': call_ids,
-                    'result': result
-                }
+                # If no call_ids but successful, return empty list
+                return []
             else:
                 print(f"❌ Batch call failed with status: {response.status_code}")
                 print(f"Response: {response.text}")
@@ -540,7 +545,7 @@ class VAPIService:
             print(transcript)
             print("-" * 40)
 
-    def make_batch_call_with_assistant(self, customers, assistant_id, schedule_immediately=True, schedule_at=None, max_retries=3, custom_variable_builder=None):
+    def make_batch_call_with_assistant(self, customers, assistant_id, schedule_immediately=True, schedule_at=None, max_retries=3, custom_variable_builder=None, skip_wait=False):
         """
         Make batch VAPI call with a specific assistant ID
 
@@ -626,6 +631,19 @@ class VAPIService:
             if not phone:
                 print(f"⚠️  Warning: Customer {customer.get('company', customer.get('insured_name', 'Unknown'))} has no phone number, skipping")
                 continue
+            
+            # Skip phone numbers starting with 52 (Mexico country code)
+            # Only skip if it's actually a Mexico number (starts with +52 or 52 with more than 10 digits)
+            # Don't skip US numbers that happen to start with 52 (like area code 552)
+            phone_cleaned = str(phone).strip().replace(" ", "").replace("-", "").replace("(", "").replace(")", "").replace(".", "").replace("/", "")
+            if phone_cleaned.startswith('+52'):
+                print(f"⚠️  Warning: Customer {customer.get('company', customer.get('insured_name', 'Unknown'))} has Mexico phone number ({phone}), skipping")
+                continue
+            # If it starts with 52 but has more than 10 digits, it's likely a Mexico number
+            if phone_cleaned.startswith('52') and len(phone_cleaned) > 10:
+                print(f"⚠️  Warning: Customer {customer.get('company', customer.get('insured_name', 'Unknown'))} has Mexico phone number ({phone}), skipping")
+                continue
+            
             formatted_phone = format_phone_number(phone)
 
             # Get customer name and truncate to 40 characters (VAPI API requirement)
@@ -747,6 +765,22 @@ class VAPIService:
         print(json.dumps(assistant_overrides.get("variableValues", {}), indent=2, ensure_ascii=False))
         print("-" * 80)
         
+        # Debug: Check customers[52] and customers[94] if they exist
+        if len(vapi_customers) > 52:
+            print(f"\n🔍 DEBUG: customers[52]:")
+            print(f"   Number: {vapi_customers[52].get('number', 'N/A')}")
+            print(f"   Number repr: {repr(vapi_customers[52].get('number', 'N/A'))}")
+            print(f"   Name: {vapi_customers[52].get('name', 'N/A')}")
+            print(f"   Number type: {type(vapi_customers[52].get('number', 'N/A'))}")
+            print(f"   Number length: {len(vapi_customers[52].get('number', ''))}")
+        if len(vapi_customers) > 94:
+            print(f"\n🔍 DEBUG: customers[94]:")
+            print(f"   Number: {vapi_customers[94].get('number', 'N/A')}")
+            print(f"   Number repr: {repr(vapi_customers[94].get('number', 'N/A'))}")
+            print(f"   Name: {vapi_customers[94].get('name', 'N/A')}")
+            print(f"   Number type: {type(vapi_customers[94].get('number', 'N/A'))}")
+            print(f"   Number length: {len(vapi_customers[94].get('number', ''))}")
+        
         # Prepare payload with the specified assistant
         payload = {
             "assistantId": assistant_id,
@@ -754,7 +788,7 @@ class VAPIService:
             "customers": vapi_customers,
             "assistantOverrides": assistant_overrides
         }
-
+        
         # Add scheduling if specified
         if schedule_at:
             # Use specific datetime if provided
@@ -772,7 +806,82 @@ class VAPIService:
         else:
             print(f"⚡ Calling immediately")
         
-        # Retry logic for API calls
+        # Split into smaller batches if too many customers (VAPI may have batch size limits)
+        # Try processing in batches of 50 to avoid API limits
+        MAX_BATCH_SIZE = 50
+        if len(vapi_customers) > MAX_BATCH_SIZE:
+            print(f"\n⚠️  Large batch detected ({len(vapi_customers)} customers). Splitting into batches of {MAX_BATCH_SIZE}...")
+            all_results = []
+            for batch_start in range(0, len(vapi_customers), MAX_BATCH_SIZE):
+                batch_end = min(batch_start + MAX_BATCH_SIZE, len(vapi_customers))
+                batch_customers = vapi_customers[batch_start:batch_end]
+                print(f"\n📦 Processing batch {batch_start // MAX_BATCH_SIZE + 1}: customers {batch_start} to {batch_end - 1}")
+                
+                batch_payload = {
+                    "assistantId": assistant_id,
+                    "phoneNumberId": self.phone_number_id,
+                    "customers": batch_customers,
+                    "assistantOverrides": assistant_overrides
+                }
+                
+                # Add scheduling
+                if schedule_at:
+                    batch_payload["schedulePlan"] = {
+                        "earliestAt": schedule_at.isoformat() + "Z"
+                    }
+                elif not schedule_immediately:
+                    schedule_time = datetime.now() + timedelta(hours=1)
+                    batch_payload["schedulePlan"] = {
+                        "earliestAt": schedule_time.isoformat() + "Z"
+                    }
+                
+                # Make batch request
+                try:
+                    batch_response = requests.post(
+                        f"{self.base_url}/call",
+                        headers={
+                            "Authorization": f"Bearer {self.api_key}",
+                            "Content-Type": "application/json"
+                        },
+                        json=batch_payload,
+                        timeout=30
+                    )
+                    
+                    print(f"📡 Batch {batch_start // MAX_BATCH_SIZE + 1} Response Status: {batch_response.status_code}")
+                    
+                    if batch_response.status_code in [200, 201]:
+                        batch_data = batch_response.json()
+                        call_ids = self._extract_call_ids(batch_data)
+                        if call_ids:
+                            all_results.extend([{'id': cid} for cid in call_ids])
+                        print(f"✅ Batch {batch_start // MAX_BATCH_SIZE + 1} completed successfully")
+                    else:
+                        error_data = batch_response.json() if batch_response.headers.get('content-type', '').startswith('application/json') else {}
+                        # Extract Request ID
+                        request_id = batch_response.headers.get('X-Request-ID') or batch_response.headers.get('Request-ID') or batch_response.headers.get('x-request-id')
+                        if not request_id and isinstance(error_data, dict):
+                            request_id = error_data.get('requestId') or error_data.get('request_id') or error_data.get('id')
+                        
+                        error_msg = error_data.get('message', batch_response.text[:200]) if isinstance(error_data, dict) else batch_response.text[:200]
+                        print(f"❌ Batch {batch_start // MAX_BATCH_SIZE + 1} failed: {error_msg}")
+                        if request_id:
+                            print(f"   🔍 Request ID: {request_id}")
+                        # Continue with next batch even if one fails
+                    
+                    # Small delay between batches
+                    if batch_end < len(vapi_customers):
+                        time.sleep(1)
+                        
+                except Exception as e:
+                    print(f"❌ Batch {batch_start // MAX_BATCH_SIZE + 1} error: {e}")
+                    # Continue with next batch
+            
+            if all_results:
+                return all_results
+            else:
+                return None
+        
+        # Retry logic for API calls (for smaller batches)
         import time
         for attempt in range(max_retries):
             try:
@@ -787,6 +896,30 @@ class VAPIService:
                 )
                 
                 print(f"📡 API Response Status: {response.status_code}")
+                
+                # Debug: Print full response for errors
+                if response.status_code >= 400:
+                    # Extract Request ID from headers if present
+                    request_id = response.headers.get('X-Request-ID') or response.headers.get('Request-ID') or response.headers.get('x-request-id')
+                    
+                    try:
+                        error_data = response.json()
+                        # Also check for Request ID in response body
+                        if not request_id:
+                            request_id = error_data.get('requestId') or error_data.get('request_id') or error_data.get('id') or error_data.get('error', {}).get('requestId')
+                        
+                        print(f"📋 Full Error Response:")
+                        print(json.dumps(error_data, indent=2, ensure_ascii=False))
+                        
+                        # Display Request ID prominently if found
+                        if request_id:
+                            print(f"🔍 Request ID: {request_id}")
+                            print(f"   (Use this ID when contacting VAPI support)")
+                    except:
+                        print(f"📋 Error Response Text: {response.text[:500]}")
+                        if request_id:
+                            print(f"🔍 Request ID: {request_id}")
+                            print(f"   (Use this ID when contacting VAPI support)")
                 
                 if response.status_code in [200, 201]:
                     call_data = response.json()
@@ -804,7 +937,8 @@ class VAPIService:
                         print(f"   Call {i}: {call_id}")
 
                     # If scheduled immediately (and not scheduled for future), monitor the calls
-                    if schedule_immediately and not schedule_at:
+                    # Unless skip_wait is True (for sequential calling)
+                    if schedule_immediately and not schedule_at and not skip_wait:
                         results = []
 
                         for i, call_id in enumerate(call_ids, 1):
@@ -820,22 +954,37 @@ class VAPIService:
 
                         return results
                     else:
-                        # For scheduled calls, return the raw response data
-                        return [call_data] * len(customers)
+                        # For scheduled calls or when skip_wait=True, return call IDs immediately
+                        # Return list of dicts with call IDs for later status checking
+                        if skip_wait:
+                            print(f"⚡ Skipping wait - returning call IDs immediately")
+                        return [{'id': cid} for cid in call_ids]
                 elif response.status_code >= 500:
                     # Server error - retryable
+                    # Extract Request ID for logging
+                    request_id = response.headers.get('X-Request-ID') or response.headers.get('Request-ID') or response.headers.get('x-request-id')
+                    
                     if attempt < max_retries - 1:
                         wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
                         print(f"⚠️  VAPI API server error ({response.status_code}). Retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries})")
+                        if request_id:
+                            print(f"   🔍 Request ID: {request_id}")
                         time.sleep(wait_time)
                         continue
                     else:
                         print(f"❌ VAPI API error after {max_retries} attempts: {response.status_code}")
+                        if request_id:
+                            print(f"🔍 Request ID: {request_id}")
+                            print(f"   (Use this ID when contacting VAPI support)")
                         print(f"Response: {response.text}")
                         return None
                 else:
                     # Client error (4xx) - not retryable
+                    request_id = response.headers.get('X-Request-ID') or response.headers.get('Request-ID') or response.headers.get('x-request-id')
                     print(f"❌ VAPI API client error: {response.status_code}")
+                    if request_id:
+                        print(f"🔍 Request ID: {request_id}")
+                        print(f"   (Use this ID when contacting VAPI support)")
                     print(f"Response: {response.text}")
                     return None
                     

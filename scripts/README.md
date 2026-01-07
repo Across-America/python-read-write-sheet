@@ -1,17 +1,43 @@
 # 📁 Scripts 目录
 
-这个目录包含一些有用的工具脚本和部署脚本。
+这个目录包含有用的工具脚本和部署脚本。
 
 ## 📋 脚本列表
+
+### 按日期处理工具（新）
+- `process_sheet_by_date.py` - **根据年份和月份处理指定的 sheet** ⭐
+  - 用法: `python scripts/process_sheet_by_date.py --year 2026 --month 1`
+  - 支持任意年份和月份
+  - 自动查找对应年份文件夹中的月份 sheet
+- `list_2026_sheets.py` - 列出 2026 文件夹中的所有 sheet
+- `process_2026_sheets.py` - 批量处理 2026 文件夹中的所有 sheet
+- `explore_folder_structure.py` - 探索 Smartsheet 文件夹结构
 
 ### 部署和运行脚本
 - `deploy_renewal.py` - Renewal Workflow 部署脚本（检查配置并部署）
 - `run_renewal_production.py` - 手动运行 Renewal Workflow 生产环境
+- `auto_stm1_calling.py` - 自动 STM1 调用工作流
+- `run_stm1_now.py` - 立即运行 STM1 工作流
+
+### 工具脚本
+- `batch_update_missing_call_notes.py` - 批量更新缺失的调用备注
+- `production_readiness_check.py` - 生产环境就绪检查
+
+### 测试脚本
+- `test_comprehensive.py` - 全面详细测试
+- `test_new_features.py` - 快速工作流测试
+
+## 📊 清理统计
+
+- **清理日期**: 2026-01-06
+- **保留脚本**: 13 个核心脚本
+- **删除脚本**: 约 70+ 个临时脚本和文档
+- **清理率**: 约 82%
 
 ## ⚠️ 注意
 
-- 大部分临时测试脚本已被清理
+- 所有临时检查、调试、分析脚本已被清理
 - 正式的测试文件位于 `tests/` 目录
 - 生产环境主要通过 GitHub Actions 自动运行（见 `.github/workflows/`）
-- 这些脚本主要用于手动部署和调试
+- 这些脚本主要用于手动部署、调试和批量处理
 

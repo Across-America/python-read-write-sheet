@@ -19,17 +19,57 @@ def format_phone_number(phone_number):
         '+19093100491'
         >>> format_phone_number("+1 909 310 0491")
         '+19093100491'
+        >>> format_phone_number("+52 867 740 1381")
+        '+528677401381'
     """
-    # Remove any spaces, dashes, or parentheses
-    cleaned = phone_number.replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+    if not phone_number:
+        return phone_number
     
+    # Convert to string if not already
+    phone_str = str(phone_number).strip()
+    
+    if not phone_str:
+        return phone_str
+    
+    # Remove any spaces, dashes, parentheses, and other common separators
+    cleaned = phone_str.replace(" ", "").replace("-", "").replace("(", "").replace(")", "").replace(".", "").replace("/", "")
+    
+    # Remove any non-digit characters except the leading +
+    if cleaned.startswith('+'):
+        # Keep the + and remove any non-digit characters after it
+        digits_only = ''.join(c for c in cleaned[1:] if c.isdigit())
+        cleaned = '+' + digits_only
+    else:
+        # Remove any non-digit characters
+        cleaned = ''.join(c for c in cleaned if c.isdigit())
+    
+    # If already starts with +, validate and return
+    if cleaned.startswith('+'):
+        # Ensure it's a valid E.164 format (at least +1 for US, or other country codes)
+        if len(cleaned) >= 8:  # Minimum: +1 + 10 digits = 12 chars, but allow shorter for other countries
+            return cleaned
+        else:
+            # If too short, might be invalid - try to fix
+            if len(cleaned) > 1:
+                # Remove the + and treat as regular number
+                cleaned = cleaned[1:]
+            else:
+                return phone_str  # Return original if can't parse
+    
+    # Handle numbers without country code
     if not cleaned.startswith('+'):
         if len(cleaned) == 10:
+            # 10-digit US number - add +1
             formatted_phone = f"+1{cleaned}"
         elif len(cleaned) == 11 and cleaned.startswith('1'):
+            # 11-digit number starting with 1 - add +
             formatted_phone = f"+{cleaned}"
-        else:
+        elif len(cleaned) > 0:
+            # Other length - assume US and add +1
             formatted_phone = f"+1{cleaned}"
+        else:
+            # Empty or invalid - return original
+            return phone_str
     else:
         formatted_phone = cleaned
     

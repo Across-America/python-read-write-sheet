@@ -22,7 +22,8 @@ from config import (
     RENEWAL_CALLING_SCHEDULE,
     RENEWAL_CALLING_START_DAY,
     MORTGAGE_BILL_1ST_REMAINDER_ASSISTANT_ID,
-    MORTGAGE_BILL_2ND_REMAINDER_ASSISTANT_ID
+    MORTGAGE_BILL_2ND_REMAINDER_ASSISTANT_ID,
+    SMARTSHEET_ACCESS_TOKEN
 )
 import math
 import logging
@@ -98,6 +99,102 @@ def parse_date(date_str):
 # ========================================
 # Dynamic Sheet Discovery
 # ========================================
+
+def get_renewal_sheet_by_date(year=None, month=None):
+    """
+    Get a renewal sheet by year and month
+    
+    Args:
+        year: Year (e.g., 2026). If None, uses current year
+        month: Month number (1-12). If None, uses current month
+    
+    Returns:
+        SmartsheetService instance
+    
+    Location: ASI -> Personal Line -> Task Prototype -> Renewal / Non-Renewal -> {year} -> {month}. {month_name} PLR
+    """
+    from datetime import datetime
+    import smartsheet
+    
+    # Use current date if not specified
+    now = datetime.now()
+    target_year = year if year else now.year
+    target_month = month if month else now.month
+    
+    # Validate month
+    if target_month < 1 or target_month > 12:
+        raise ValueError(f"Invalid month: {target_month}. Month must be between 1 and 12.")
+    
+    try:
+        smart = smartsheet.Smartsheet(access_token=SMARTSHEET_ACCESS_TOKEN)
+        smart.errors_as_exceptions(True)
+        
+        # Find workspace
+        workspaces = smart.Workspaces.list_workspaces(pagination_type='token').data
+        workspace_id = None
+        for ws in workspaces:
+            if ws.name.lower() == RENEWAL_WORKSPACE_NAME.lower():
+                workspace_id = ws.id
+                break
+        
+        if not workspace_id:
+            raise ValueError(f"Workspace '{RENEWAL_WORKSPACE_NAME}' not found")
+        
+        # Navigate to year folder
+        workspace = smart.Workspaces.get_workspace(workspace_id, load_all=True)
+        folder_path = ["Personal Line", "Task Prototype", "Renewal / Non-Renewal", str(target_year)]
+        
+        current = workspace
+        for folder_name in folder_path:
+            if hasattr(current, 'folders'):
+                folders = current.folders
+            else:
+                folder_details = smart.Folders.get_folder(current.id)
+                folders = folder_details.folders if hasattr(folder_details, 'folders') else []
+            
+            found = False
+            for folder in folders:
+                if folder.name.lower() == folder_name.lower():
+                    if folder_name == str(target_year):
+                        # Found year folder, now find the sheet
+                        folder_details = smart.Folders.get_folder(folder.id)
+                        month_names = [
+                            "January", "February", "March", "April", "May", "June",
+                            "July", "August", "September", "October", "November", "December"
+                        ]
+                        month_name = month_names[target_month - 1]
+                        
+                        # Try different naming patterns
+                        patterns = [
+                            f"{target_month}. {month_name} PLR",
+                            f"{target_month:02d}. {month_name} PLR",
+                            f"{month_name} PLR",
+                        ]
+                        
+                        if hasattr(folder_details, 'sheets') and folder_details.sheets:
+                            for sheet in folder_details.sheets:
+                                sheet_name_lower = sheet.name.lower()
+                                for pattern in patterns:
+                                    if pattern.lower() in sheet_name_lower:
+                                        print(f"✅ Found sheet: '{sheet.name}' (ID: {sheet.id})")
+                                        return SmartsheetService(sheet_id=sheet.id)
+                        
+                        raise ValueError(f"Sheet for {month_name} {target_year} not found in folder")
+                    
+                    folder_details = smart.Folders.get_folder(folder.id)
+                    current = folder_details
+                    found = True
+                    break
+            
+            if not found:
+                raise ValueError(f"Folder '{folder_name}' not found in path")
+        
+        raise ValueError(f"Year folder '{target_year}' not found")
+    
+    except Exception as e:
+        print(f"❌ Error finding sheet for {target_year}-{target_month:02d}: {e}")
+        raise
+
 
 def get_current_renewal_sheet():
     """
@@ -1295,7 +1392,7 @@ class RenewalWorkflowErrorLogger:
         print(f"{'=' * 80}")
 
 
-def run_renewal_batch_calling(test_mode=False, schedule_at=None, auto_confirm=False):
+def run_renewal_batch_calling(test_mode=False, schedule_at=None, auto_confirm=False, sheet_id=None, sheet_name=None):
     """
     Main function to run renewal batch calling with comprehensive error handling
     
@@ -1303,6 +1400,8 @@ def run_renewal_batch_calling(test_mode=False, schedule_at=None, auto_confirm=Fa
         test_mode: If True, skip actual calls and Smartsheet updates (default: False)
         schedule_at: Optional datetime to schedule calls
         auto_confirm: If True, skip user confirmation prompt (for cron jobs) (default: False)
+        sheet_id: Optional sheet ID to use instead of current month's sheet (for batch processing)
+        sheet_name: Optional sheet name to use (for batch processing)
     """
     # Initialize error logger
     error_logger = RenewalWorkflowErrorLogger()
@@ -1313,14 +1412,23 @@ def run_renewal_batch_calling(test_mode=False, schedule_at=None, auto_confirm=Fa
         print("🧪 TEST MODE - No actual calls or updates will be made")
     if schedule_at:
         print(f"⏰ SCHEDULED MODE - Calls will be scheduled for {schedule_at.strftime('%Y-%m-%d %H:%M:%S')}")
+    if sheet_id:
+        print(f"📋 Using specified sheet ID: {sheet_id}")
+    if sheet_name:
+        print(f"📋 Using specified sheet: {sheet_name}")
     print("=" * 80)
     print("📋 N1 Project: Renewal notifications with dynamic sheet discovery")
     print("📞 4-stage calling: 14 days → 7 days → 1 day → day of expiry")
     print("=" * 80)
     
     try:
-        # Initialize services with dynamic sheet discovery
-        smartsheet_service = get_current_renewal_sheet()
+        # Initialize services with dynamic sheet discovery or specified sheet
+        if sheet_id:
+            smartsheet_service = SmartsheetService(sheet_id=sheet_id)
+        elif sheet_name:
+            smartsheet_service = SmartsheetService(sheet_name=sheet_name, workspace_name=RENEWAL_WORKSPACE_NAME)
+        else:
+            smartsheet_service = get_current_renewal_sheet()
         vapi_service = VAPIService()
     except Exception as e:
         error_logger.log_error({}, 0, 'INITIALIZATION_ERROR', f"Failed to initialize services: {e}", e)
@@ -1342,7 +1450,17 @@ def run_renewal_batch_calling(test_mode=False, schedule_at=None, auto_confirm=Fa
     total_customers = total_non_expired + total_mortgage_bill + total_expired_after
     
     if total_customers == 0:
-        print("\n✅ No renewal or mortgage bill customers ready for calls today")
+        print("\n" + "=" * 80)
+        print("ℹ️  NO CUSTOMERS READY FOR CALLS TODAY")
+        print("=" * 80)
+        print("   • Renewal customers ready: 0")
+        print("   • Mortgage Bill customers ready: 0")
+        print("   • Expired after customers ready: 0")
+        print("\n   This is normal if:")
+        print("   - No customers meet the calling criteria today")
+        print("   - All eligible customers have already been called")
+        print("   - No customers are in the calling window")
+        print("=" * 80)
         return True
     
     # Show summary and ask for confirmation
@@ -1396,16 +1514,18 @@ def run_renewal_batch_calling(test_mode=False, schedule_at=None, auto_confirm=Fa
     
     print(f"\n{'=' * 80}")
     if not test_mode:
-        print(f"⚠️  WARNING: This will make {total_customers} phone calls!")
+        print(f"📞 PRODUCTION MODE: Will make {total_customers} ACTUAL phone calls!")
         print(f"   • Renewal (未过期保单): {total_non_expired} 通")
         print(f"   • Mortgage Bill: {total_mortgage_bill} 通")
         print(f"   • 过期后保单: {total_expired_after} 通")
         print(f"💰 This will incur charges for each call")
+        print(f"\n⚠️  CONFIRMATION: Calls will be made automatically (auto_confirm=True)")
     else:
         print(f"🧪 TEST MODE: Will simulate {total_customers} calls (no charges)")
         print(f"   • Renewal (未过期保单): {total_non_expired} 通")
         print(f"   • Mortgage Bill: {total_mortgage_bill} 通")
         print(f"   • 过期后保单: {total_expired_after} 通")
+        print(f"\n⚠️  NOTE: No actual calls will be made in test mode")
     print(f"{'=' * 80}")
 
     # Only ask for confirmation if not auto_confirm and not test_mode
@@ -1466,6 +1586,9 @@ def run_renewal_batch_calling(test_mode=False, schedule_at=None, auto_confirm=Fa
                     continue
                 
                 try:
+                    if not test_mode:
+                        print(f"\n🚀 PRODUCTION MODE: Making ACTUAL batch VAPI call to {len(validated_customers)} customers")
+                        print(f"   ⚠️  Real calls will be made - charges will apply")
                     results = vapi_service.make_batch_call_with_assistant(
                         validated_customers,
                         assistant_id,
@@ -1553,6 +1676,9 @@ def run_renewal_batch_calling(test_mode=False, schedule_at=None, auto_confirm=Fa
                     customer_for_call = {**customer, **validated_data}
 
                     try:
+                        if not test_mode:
+                            print(f"\n🚀 PRODUCTION MODE: Making ACTUAL VAPI call to {customer_for_call.get('company', 'Unknown')}")
+                            print(f"   ⚠️  Real call will be made - charges will apply")
                         results = vapi_service.make_batch_call_with_assistant(
                             [customer_for_call],  # Only one customer at a time
                             assistant_id,
@@ -1637,6 +1763,9 @@ def run_renewal_batch_calling(test_mode=False, schedule_at=None, auto_confirm=Fa
                 print(f"\n⚠️  No valid customers for expired after calls after validation")
             else:
                 try:
+                    if not test_mode:
+                        print(f"\n🚀 PRODUCTION MODE: Making ACTUAL batch VAPI call to {len(validated_customers)} expired customers")
+                        print(f"   ⚠️  Real calls will be made - charges will apply")
                     results = vapi_service.make_batch_call_with_assistant(
                         validated_customers,
                         EXPIRED_AFTER_ASSISTANT_ID,
@@ -1732,6 +1861,9 @@ def run_renewal_batch_calling(test_mode=False, schedule_at=None, auto_confirm=Fa
                 if stage == 0:
                     print(f"📦 Batch calling mode (simultaneous)")
                     try:
+                        if not test_mode:
+                            print(f"\n🚀 PRODUCTION MODE: Making ACTUAL batch VAPI call to {len(customers)} mortgage bill customers")
+                            print(f"   ⚠️  Real calls will be made - charges will apply")
                         results = vapi_service.make_batch_call_with_assistant(
                             customers,
                             assistant_id,
@@ -1795,6 +1927,9 @@ def run_renewal_batch_calling(test_mode=False, schedule_at=None, auto_confirm=Fa
                         print(f"\n   📞 Call {i}/{len(customers)}: {customer.get('company', 'Unknown')}")
                         
                         try:
+                            if not test_mode:
+                                print(f"\n🚀 PRODUCTION MODE: Making ACTUAL VAPI call to {customer.get('company', 'Unknown')}")
+                                print(f"   ⚠️  Real call will be made - charges will apply")
                             results = vapi_service.make_batch_call_with_assistant(
                                 [customer],
                                 assistant_id,

@@ -83,6 +83,8 @@ def main():
         # CL1 (Cancellations): 11:00 AM and 4:00 PM (twice daily)
         # N1 (Renewals, Non-Renewals): 4:00 PM
         # STM1: 9:00 AM (calling hours: 9:00 AM - 5:00 PM)
+        # Note: For cron-triggered runs, we only check the hour (not minutes)
+        # to allow for GitHub Actions execution delays
         if workflow_type == 'cancellations':
             # Cancellations run twice daily: 11:00 AM and 4:00 PM
             target_hours = [11, 16]  # 11:00 AM and 4:00 PM
@@ -98,6 +100,8 @@ def main():
             target_hours = [11]
             target_time_str = "11:00 AM"
 
+        # Only check hour, not minutes - this allows for GitHub Actions delays
+        # Cron triggers at specific times, but execution may be delayed
         if now_pacific.hour not in target_hours:
             logger.info(f"⏭️  Skipping: Current Pacific time is {now_pacific.strftime('%I:%M %p')}, not {target_time_str}")
             logger.info(f"   This is expected due to daylight saving time handling")

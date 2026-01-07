@@ -13,8 +13,16 @@ sys.path.insert(0, str(project_root))
 # Fix Windows encoding issue
 if sys.platform == 'win32':
     import io
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+    if not isinstance(sys.stdout, io.TextIOWrapper):
+        try:
+            sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+        except (AttributeError, ValueError):
+            pass
+    if not isinstance(sys.stderr, io.TextIOWrapper):
+        try:
+            sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+        except (AttributeError, ValueError):
+            pass
 
 from workflows.stm1 import (
     get_stm1_sheet,
@@ -34,7 +42,7 @@ STOP_HOUR = 16  # 4 PM
 STOP_MINUTE = 55  # 4:55 PM (must stop before 5 PM)
 
 def get_customers_with_empty_called_times(smartsheet_service):
-    """Get all customers where called_times is empty or 0"""
+    """Get all customers where called_times is empty or 0, sorted by row number (ascending)"""
     all_customers = smartsheet_service.get_all_customers_with_stages()
     
     customers_to_call = []
@@ -54,8 +62,18 @@ def get_customers_with_empty_called_times(smartsheet_service):
                 # Check required fields
                 insured_name = customer.get('insured_name_', '') or customer.get('insured_name', '') or customer.get('company', '')
                 phone = customer.get('phone_number', '') or customer.get('contact_phone', '')
-                if insured_name and phone:
-                    customers_to_call.append(customer)
+                if not insured_name or not phone:
+                    continue
+                
+                # Skip phone numbers starting with 52 (Mexico country code)
+                phone_cleaned = phone.strip().replace(" ", "").replace("-", "").replace("(", "").replace(")", "").replace(".", "").replace("/", "")
+                if phone_cleaned.startswith('+52'):
+                    continue
+                # If it starts with 52 but has more than 10 digits, it's likely a Mexico number
+                if phone_cleaned.startswith('52') and len(phone_cleaned) > 10:
+                    continue
+                
+                customers_to_call.append(customer)
         except (ValueError, TypeError):
             # If parsing fails, treat as 0 (not called yet)
             if customer.get('done?') not in [True, 'true', 'True', 1]:
@@ -63,8 +81,56 @@ def get_customers_with_empty_called_times(smartsheet_service):
                 if recorded_or_not not in [True, 'true', 'True', 1, 'TRUE']:
                     insured_name = customer.get('insured_name_', '') or customer.get('insured_name', '') or customer.get('company', '')
                     phone = customer.get('phone_number', '') or customer.get('contact_phone', '')
-                    if insured_name and phone:
-                        customers_to_call.append(customer)
+                    if not insured_name or not phone:
+                        continue
+                    
+                    # Skip phone numbers starting with 52 (Mexico country code)
+                    phone_cleaned = phone.strip().replace(" ", "").replace("-", "").replace("(", "").replace(")", "").replace(".", "").replace("/", "")
+                    if phone_cleaned.startswith('+52'):
+                        continue
+                    # If it starts with 52 but has more than 10 digits, it's likely a Mexico number
+                    if phone_cleaned.startswith('52') and len(phone_cleaned) > 10:
+                        continue
+                    
+                    customers_to_call.append(customer)
+    
+    # Sort by row number (ascending) to call from the beginning
+    # CRITICAL: Must convert to int for proper numeric sorting
+    def get_row_number(customer):
+        row_num = customer.get('row_number', 0)
+        if row_num is None:
+            return 999999  # Put None at the end
+        try:
+            # Convert to int for proper numeric sorting
+            num = int(row_num)
+            return num
+        except (ValueError, TypeError):
+            return 999999  # Put invalid values at the end
+    
+    # Sort in ascending order (smallest row numbers first)
+    customers_to_call.sort(key=get_row_number, reverse=False)
+    
+    # Debug: Print first few rows to verify sorting
+    if customers_to_call:
+        first_rows = [c.get('row_number') for c in customers_to_call[:5]]
+        last_rows = [c.get('row_number') for c in customers_to_call[-5:]]
+        print(f"   [SORT VERIFY] First 5 rows: {first_rows}")
+        print(f"   [SORT VERIFY] Last 5 rows: {last_rows}")
+        
+        # Verify sorting is correct
+        row_nums = []
+        for c in customers_to_call:
+            try:
+                row_nums.append(int(c.get('row_number', 0)))
+            except:
+                pass
+        
+        if len(row_nums) > 1:
+            is_sorted = all(row_nums[i] <= row_nums[i+1] for i in range(len(row_nums)-1))
+            if not is_sorted:
+                print(f"   [ERROR] Sorting FAILED! List is not in ascending order!")
+            else:
+                print(f"   [OK] Sorting verified: ascending order (first={row_nums[0]}, last={row_nums[-1]})")
     
     return customers_to_call
 
@@ -155,24 +221,15 @@ if __name__ == "__main__":
         # Get customers with empty called_times (with error handling)
         try:
             print(f"\n[{now_pacific.strftime('%H:%M:%S')}] Loading customers with empty called_times...")
-            print(f"[{now_pacific.strftime('%H:%M:%S')}] Loading all customers from Smartsheet...")
-            all_customers = smartsheet_service.get_all_customers_with_stages()
-            print(f"[{now_pacific.strftime('%H:%M:%S')}] Loaded {len(all_customers)} total customers")
-            
             customers_to_call = get_customers_with_empty_called_times(smartsheet_service)
             print(f"[{now_pacific.strftime('%H:%M:%S')}] Found {len(customers_to_call)} customers to call")
             
-            # Debug: Show why customers might be filtered out
-            if len(customers_to_call) == 0 and len(all_customers) > 0:
-                print(f"[{now_pacific.strftime('%H:%M:%S')}] ⚠️  WARNING: Found 0 customers but {len(all_customers)} total customers exist")
-                print(f"[{now_pacific.strftime('%H:%M:%S')}] Debugging first 5 customers...")
-                for i, customer in enumerate(all_customers[:5], 1):
-                    called_times = customer.get('called_times', '') or customer.get('called_time', '') or customer.get('called time', '')
-                    done = customer.get('done?', False)
-                    recorded = customer.get('recorded_or_not', '') or customer.get('recorded or not', '')
-                    name = customer.get('insured_name_', '') or customer.get('insured_name', '') or customer.get('company', '')
-                    phone = customer.get('phone_number', '') or customer.get('contact_phone', '')
-                    print(f"   Customer {i}: called_times='{called_times}', done={done}, recorded={recorded}, name={bool(name)}, phone={bool(phone)}")
+            # Debug: Show first and last few row numbers to verify sorting
+            if customers_to_call:
+                first_rows = [c.get('row_number') for c in customers_to_call[:5]]
+                last_rows = [c.get('row_number') for c in customers_to_call[-5:]]
+                print(f"   [SORT CHECK] First 5 rows: {first_rows}")
+                print(f"   [SORT CHECK] Last 5 rows: {last_rows}")
         except Exception as e:
             print(f"\n❌ Error loading customers: {e}")
             import traceback
@@ -183,28 +240,21 @@ if __name__ == "__main__":
         
         if not customers_to_call:
             no_customers_count += 1
-            print(f"\n[{now_pacific.strftime('%H:%M:%S')}] ⚠️  No customers with empty called_times found")
-            print(f"[{now_pacific.strftime('%H:%M:%S')}] Attempt {no_customers_count}/{MAX_NO_CUSTOMERS}")
-            
+            print(f"\n✅ No more customers with empty called_times")
             if no_customers_count >= MAX_NO_CUSTOMERS:
-                print(f"\n{'=' * 80}")
-                print(f"❌ EXITING: No customers found after {MAX_NO_CUSTOMERS} attempts")
-                print(f"{'=' * 80}")
-                print(f"   Total customers in sheet: {len(all_customers) if 'all_customers' in locals() else 'unknown'}")
-                print(f"   Customers to call: 0")
+                print(f"   No customers found after {MAX_NO_CUSTOMERS} attempts. Exiting.")
                 print(f"   Summary: Success={total_success}, Failed={total_failed}, Transferred={total_transferred}")
-                print(f"{'=' * 80}")
                 break
-            
             print(f"   Waiting 5 minutes before checking again... ({no_customers_count}/{MAX_NO_CUSTOMERS})")
             time.sleep(300)  # Wait 5 minutes before checking again
             continue
         else:
             no_customers_count = 0  # Reset counter when customers found
-            print(f"[{now_pacific.strftime('%H:%M:%S')}] ✅ Found {len(customers_to_call)} customers - starting calls...")
         
-        # Get first customer
+        # Get first customer (should be smallest row number)
         customer = customers_to_call[0]
+        row_num = customer.get('row_number', 'N/A')
+        print(f"   [CALLING] Next customer: Row {row_num}")
         
         # Check time again before initiating call (in case we're close to 4:55 PM)
         now_pacific = datetime.now(pacific_tz)
@@ -285,22 +335,56 @@ if __name__ == "__main__":
                 
                 # For automated calling with skip_wait=True, call_data may be minimal
                 # Try to get current status if call_id exists
-                if call_id and call_data.get('status') == 'initiated':
-                    try:
-                        # Quick check - don't wait
-                        quick_check = vapi_service.check_call_status(call_id)
-                        if quick_check:
-                            status = quick_check.get('status', 'unknown')
-                            ended_reason = quick_check.get('endedReason', '')
-                            print(f"   📊 Call status: {status} ({ended_reason})")
+                if call_id:
+                    # Wait for call to complete and analysis to be ready
+                    # This ensures call_notes will have complete information
+                    max_wait_for_analysis = 120  # Wait up to 2 minutes for analysis
+                    analysis_ready = False
+                    
+                    if call_data.get('status') == 'initiated' or not call_data.get('analysis'):
+                        print(f"   ⏳ Waiting for call to complete and analysis to be ready...")
+                        try:
+                            # Wait for call completion with analysis
+                            final_call_data = vapi_service.wait_for_call_completion(
+                                call_id,
+                                check_interval=5,  # Check every 5 seconds
+                                max_wait_time=max_wait_for_analysis
+                            )
                             
-                            # Use quick_check if it has more info
-                            if status != 'unknown':
-                                call_data = quick_check
+                            if final_call_data and final_call_data.get('analysis'):
+                                call_data = final_call_data
+                                analysis_ready = True
+                                print(f"   ✅ Call completed with analysis ready")
+                            elif final_call_data:
+                                # Call completed but analysis not ready yet
+                                call_data = final_call_data
+                                print(f"   ⚠️  Call completed but analysis not ready yet")
+                                
+                                # Try a few more times to get analysis
+                                for retry in range(3):
+                                    time.sleep(10)  # Wait 10 seconds
+                                    check_result = vapi_service.check_call_status(call_id)
+                                    if check_result and check_result.get('analysis'):
+                                        call_data = check_result
+                                        analysis_ready = True
+                                        print(f"   ✅ Analysis ready after retry {retry + 1}")
+                                        break
+                        except Exception as e:
+                            print(f"      ⚠️  Error waiting for analysis: {e}")
+                            # Continue with available call_data
+                    else:
+                        # Call already completed, check if analysis is ready
+                        if call_data.get('analysis'):
+                            analysis_ready = True
                         else:
-                            print(f"   ⏳ Call initiated, status will be checked later")
-                    except Exception as e:
-                        print(f"      ⚠️  Quick check failed: {e}")
+                            # Try to get analysis
+                            try:
+                                check_result = vapi_service.check_call_status(call_id)
+                                if check_result and check_result.get('analysis'):
+                                    call_data = check_result
+                                    analysis_ready = True
+                            except:
+                                pass
                 
                 # Check transfer status
                 ended_reason = call_data.get('endedReason', '')
@@ -308,17 +392,23 @@ if __name__ == "__main__":
                     total_transferred += 1
                     print(f"   🔄 Transfer detected!")
                 
-                # Update Smartsheet (even without analysis - will update again later)
+                # Update Smartsheet with call_notes
+                # Now we have waited for analysis, so call_notes should be complete
                 try:
                     success = update_after_stm1_call(smartsheet_service, customer, call_data)
                     if success:
-                        print(f"   ✅ Smartsheet updated")
+                        if analysis_ready:
+                            print(f"   ✅ Smartsheet updated with complete call_notes")
+                        else:
+                            print(f"   ⚠️  Smartsheet updated but analysis may be incomplete")
                         total_success += 1
                     else:
-                        print(f"   ⚠️  Smartsheet update returned False (may retry later)")
+                        print(f"   ❌ Smartsheet update returned False")
                         total_failed += 1
                 except Exception as e:
                     print(f"   ❌ Exception during Smartsheet update: {e}")
+                    import traceback
+                    traceback.print_exc()
                     total_failed += 1
             else:
                 print(f"   ❌ Call failed - no results returned")

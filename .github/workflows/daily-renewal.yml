@@ -2,18 +2,18 @@ name: Daily Renewal Workflow
 
 on:
   schedule:
-    # Run at 11:00 AM and 4:00 PM Pacific time
+    # Run at 11:00 AM and 4:00 PM Pacific time (with time window 10-12 AM and 3-5 PM)
     # Handle daylight saving time automatically with multiple cron schedules
-    # 11:00 AM Pacific:
-    # - UTC 18:00 = 11:00 AM PDT (summer, Mar-Nov) ✅
-    # - UTC 19:00 = 11:00 AM PST (winter, Nov-Mar) ✅
-    # 4:00 PM Pacific:
-    # - UTC 23:00 = 4:00 PM PDT (summer, Mar-Nov) ✅
-    # - UTC 00:00 = 4:00 PM PST (winter, Nov-Mar) ✅ (next day)
-    - cron: "0 18 * * *"  # 11:00 AM PDT (summer)
-    - cron: "0 19 * * *"  # 11:00 AM PST (winter)
-    - cron: "0 23 * * *"  # 4:00 PM PDT (summer)
-    - cron: "0 0 * * *"   # 4:00 PM PST (winter, next day)
+    # Morning window (10:00 AM - 12:00 PM Pacific):
+    # - UTC 18:00 = 10:00 AM PST / 11:00 AM PDT ✅
+    # - UTC 19:00 = 11:00 AM PST / 12:00 PM PDT ✅
+    # Afternoon window (3:00 PM - 5:00 PM Pacific):
+    # - UTC 23:00 = 3:00 PM PST / 4:00 PM PDT ✅
+    # - UTC 00:00 = 4:00 PM PST / 5:00 PM PDT ✅ (next day)
+    - cron: "0 18 * * *"  # 10 AM PST / 11 AM PDT
+    - cron: "0 19 * * *"  # 11 AM PST / 12 PM PDT
+    - cron: "0 23 * * *"  # 3 PM PST / 4 PM PDT
+    - cron: "0 0 * * *"   # 4 PM PST / 5 PM PDT (next day)
   workflow_dispatch:  # Allow manual trigger from GitHub Actions UI
 
 jobs:
