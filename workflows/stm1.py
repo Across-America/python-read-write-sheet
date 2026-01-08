@@ -540,10 +540,15 @@ Was Voicemail Left: {was_voicemail_left}
         call_notes_summary = summary if summary and summary != 'No summary available' else ''
     
     # Combine structured format with summary (add "analysis:" label)
+    # IMPORTANT: Even if analysis is not available, we still create call notes
+    # This ensures we have a record that the call was made
     if call_notes_summary:
         call_notes_entry = call_notes_structured + f"\nanalysis:\n\n{call_notes_summary}\n"
     else:
-        call_notes_entry = call_notes_structured
+        # Even without analysis, create basic call notes entry
+        # This is CRITICAL - we must record that a call was made
+        call_notes_entry = call_notes_structured + f"\nanalysis:\n\nCall completed. Analysis not available yet (may be generated later).\n"
+        print(f"   ⚠️  No analysis available, but creating basic call notes entry")
     
     # Get existing call notes
     existing_notes = customer.get('call_notes', '') or customer.get('stm1_call_notes', '')
@@ -579,8 +584,6 @@ Was Voicemail Left: {was_voicemail_left}
     if ended_reason == 'assistant-forwarded-call':
         was_transferred = 'Yes'
         print(f"   🔄 Transfer detected! endedReason='{ended_reason}' -> was_transferred='{was_transferred}'")
-    else:
-        print(f"   📞 No transfer detected. endedReason='{ended_reason}' (expected 'assistant-forwarded-call' for transfer)")
     
     updates = {
         'call_notes': new_call_notes,  # Store formatted call notes (same format as CL1 and N1)
@@ -594,18 +597,74 @@ Was Voicemail Left: {was_voicemail_left}
         'transfer_status': was_transferred,  # Another alternative column name
     }
 
-    # Perform update
-    success = smartsheet_service.update_customer_fields(customer, updates)
-
-    if success:
-        print(f"✅ Smartsheet updated successfully")
-        print(f"   • Call Notes: Updated with formatted call notes (same format as CL1/N1)")
-        print(f"   • Call Date in Notes: {call_placed_at} (stored in call_notes)")
-        print(f"   • Called Times: Updated to {called_time_count} (incremented from {called_time_count - 1})")
-        print(f"   • Transfer Status: {was_transferred} (endedReason: {ended_reason})")
-        print(f"   • transferred_to_aacs_or_not column: Updated to '{was_transferred}'")
-    else:
-        print(f"❌ Smartsheet update failed")
+    # Perform update with retry mechanism
+    max_retries = 3
+    success = False
+    last_error = None
+    
+    for attempt in range(max_retries):
+        try:
+            print(f"   📝 Attempting Smartsheet update (attempt {attempt + 1}/{max_retries})...")
+            print(f"      Fields to update: {list(updates.keys())}")
+            
+            success = smartsheet_service.update_customer_fields(customer, updates)
+            
+            if success:
+                print(f"✅ Smartsheet updated successfully")
+                print(f"   • Call Notes: Updated with formatted call notes (same format as CL1/N1)")
+                print(f"   • Call Date in Notes: {call_placed_at} (stored in call_notes)")
+                print(f"   • Called Times: Updated to {called_time_count} (incremented from {called_time_count - 1})")
+                print(f"   • Transfer Status: {was_transferred} (endedReason: {ended_reason})")
+                print(f"   • transferred_to_aacs_or_not column: Updated to '{was_transferred}'")
+                break
+            else:
+                print(f"   ⚠️  Update returned False on attempt {attempt + 1}")
+                if attempt < max_retries - 1:
+                    print(f"      Retrying in 2 seconds...")
+                    import time
+                    time.sleep(2)
+                else:
+                    print(f"   ❌ Smartsheet update failed after {max_retries} attempts")
+                    print(f"      This is CRITICAL - call notes and called_times were NOT updated!")
+                    print(f"      Customer: Row {customer.get('row_number', 'N/A')}")
+                    print(f"      Updates attempted: {list(updates.keys())}")
+                    
+        except Exception as e:
+            last_error = e
+            print(f"   ❌ Exception during Smartsheet update (attempt {attempt + 1}): {e}")
+            import traceback
+            traceback.print_exc()
+            
+            if attempt < max_retries - 1:
+                print(f"      Retrying in 2 seconds...")
+                import time
+                time.sleep(2)
+            else:
+                print(f"   ❌ Smartsheet update failed after {max_retries} attempts with exception")
+                print(f"      Last error: {last_error}")
+                print(f"      This is CRITICAL - call notes and called_times were NOT updated!")
+    
+    # If update still failed, try updating at least called_times as a fallback
+    if not success:
+        print(f"   🔄 FALLBACK: Attempting to update at least called_times...")
+        try:
+            # Try updating only called_times (most critical field)
+            fallback_updates = {
+                'called_times': str(called_time_count),
+            }
+            fallback_success = smartsheet_service.update_customer_fields(customer, fallback_updates)
+            if fallback_success:
+                print(f"   ⚠️  Partial success: called_times updated, but call_notes update failed")
+                print(f"      This means the call was recorded but notes are missing")
+                # Return True so the script continues, but log the issue
+                return True
+            else:
+                print(f"   ❌ CRITICAL: Even fallback update (called_times) failed!")
+                print(f"      This means NO record of the call was saved!")
+        except Exception as e:
+            print(f"   ❌ CRITICAL: Fallback update also failed: {e}")
+            import traceback
+            traceback.print_exc()
 
     return success
 

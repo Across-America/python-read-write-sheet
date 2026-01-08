@@ -413,8 +413,10 @@ if __name__ == "__main__":
                     print(f"   🔄 Transfer detected!")
                 
                 # Update Smartsheet with call_notes
+                # CRITICAL: This must succeed to record that a call was made
                 # Now we have waited for analysis, so call_notes should be complete
                 try:
+                    print(f"   📝 Updating Smartsheet with call results...")
                     success = update_after_stm1_call(smartsheet_service, customer, call_data)
                     if success:
                         if analysis_ready:
@@ -423,16 +425,22 @@ if __name__ == "__main__":
                             print(f"   ⚠️  Smartsheet updated but analysis may be incomplete")
                         total_success += 1
                     else:
-                        print(f"   ❌ Smartsheet update returned False")
-                        print(f"   ⚠️  Continuing to next call despite update failure...")
+                        print(f"   ❌ CRITICAL: Smartsheet update returned False")
+                        print(f"   ⚠️  Call was made but NOT recorded in Smartsheet!")
+                        print(f"   ⚠️  This means:")
+                        print(f"      - called_times was NOT incremented")
+                        print(f"      - call_notes was NOT updated")
+                        print(f"      - Next run will try to call the same customer again")
+                        print(f"   ⚠️  Continuing to next call, but this is a serious issue...")
                         total_failed += 1
                 except Exception as e:
-                    print(f"   ❌ Exception during Smartsheet update: {e}")
-                    print(f"   ⚠️  Continuing to next call despite error...")
+                    print(f"   ❌ CRITICAL: Exception during Smartsheet update: {e}")
+                    print(f"   ⚠️  Call was made but NOT recorded in Smartsheet!")
+                    print(f"   ⚠️  This is a serious error - the call will not be tracked!")
                     import traceback
                     traceback.print_exc()
                     total_failed += 1
-                    # Don't break - continue to next call
+                    # Don't break - continue to next call, but log the critical error
             else:
                 print(f"   ❌ Call failed - no results returned")
                 total_failed += 1

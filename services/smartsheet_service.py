@@ -476,11 +476,40 @@ class SmartsheetService:
                 cells_to_update = []
 
                 for field_name, value in field_updates.items():
+                    # First try exact match
                     col_info = name_map.get(field_name)
-
+                    
+                    # If not found, try normalized match (handle spaces, underscores, case)
                     if not col_info:
-                        print(f"   ⚠️  Field '{field_name}' not found in sheet, skipping")
-                        continue
+                        # Normalize the field_name we're looking for
+                        field_normalized = self._normalize_field_name(field_name)
+                        col_info = name_map.get(field_normalized)
+                        
+                        if col_info:
+                            print(f"   [INFO] Found field '{field_name}' as normalized '{field_normalized}' in sheet")
+                    
+                    # If still not found, try reverse lookup by title
+                    if not col_info:
+                        field_lower = field_name.lower().replace('_', ' ').replace('-', ' ').strip()
+                        for key, info in name_map.items():
+                            # Check if the title matches (normalized)
+                            title_normalized = info.get('title', '').lower().replace('_', ' ').replace('-', ' ').strip()
+                            if title_normalized == field_lower:
+                                col_info = info
+                                print(f"   [INFO] Found field '{field_name}' by title match: '{info.get('title')}'")
+                                break
+                        
+                        if not col_info:
+                            print(f"   ⚠️  Field '{field_name}' not found in sheet, skipping")
+                            print(f"      Tried: '{field_name}', normalized: '{self._normalize_field_name(field_name)}'")
+                            print(f"      Available fields (first 30): {list(name_map.keys())[:30]}")
+                            # Show exact column titles that might match
+                            print(f"      Searching for columns with similar names...")
+                            for key, info in name_map.items():
+                                title = info.get('title', '')
+                                if any(word in title.lower() for word in field_name.lower().split('_')):
+                                    print(f"         Potential match: '{title}' -> normalized: '{key}'")
+                            continue
 
                     cell = self.smart.models.Cell()
                     cell.column_id = col_info['id']
@@ -500,6 +529,8 @@ class SmartsheetService:
 
                 if not cells_to_update:
                     print("   ⚠️  No valid cells to update")
+                    print(f"      Attempted to update: {list(field_updates.keys())}")
+                    print(f"      Available fields in sheet: {list(name_map.keys())[:30]}")
                     return False
 
                 # Create update row
@@ -512,9 +543,12 @@ class SmartsheetService:
 
                 if result.result:
                     print(f"   ✅ Successfully updated {len(cells_to_update)} fields")
+                    print(f"      Updated fields: {[name_map.get(field, {}).get('title', field) for field in field_updates.keys() if name_map.get(field)]}")
                     return True
                 else:
                     print(f"   ❌ Update failed: {result}")
+                    print(f"      Attempted to update: {list(field_updates.keys())}")
+                    print(f"      Cells prepared: {len(cells_to_update)}")
                     return False
 
             except Exception as e:
