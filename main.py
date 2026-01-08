@@ -87,8 +87,20 @@ def main():
         # to allow for GitHub Actions execution delays
         if workflow_type == 'cancellations':
             # Cancellations run twice daily: 11:00 AM and 4:00 PM
-            target_hours = [11, 16]  # 11:00 AM and 4:00 PM
-            target_time_str = "11:00 AM or 4:00 PM"
+            # Use time windows to handle DST and GitHub Actions delays:
+            # - Morning: 10:00 AM - 12:59 PM (covers 10 AM, 11 AM, 12 PM)
+            # - Afternoon: 3:00 PM - 5:59 PM (covers 3 PM, 4 PM, 5 PM)
+            # Note: UTC 23:00 in PST = 3:00 PM, UTC 00:00 in PST = 4:00 PM
+            # So we need a window to cover both cases
+            morning_window = (10 <= now_pacific.hour <= 12)
+            afternoon_window = (15 <= now_pacific.hour <= 17)
+            
+            if not (morning_window or afternoon_window):
+                logger.info(f"⏭️  Skipping: Current Pacific time is {now_pacific.strftime('%I:%M %p')}, not in 10:00 AM - 12:59 PM or 3:00 PM - 5:59 PM")
+                logger.info(f"   This is expected due to daylight saving time handling")
+                logger.info("=" * 80)
+                return 0
+            # Continue to weekend check below
         elif workflow_type == 'stm1':
             target_hours = [9]  # 9:00 AM (STM1 calling hours: 9:00 AM - 5:00 PM)
             target_time_str = "9:00 AM"
@@ -102,11 +114,13 @@ def main():
 
         # Only check hour, not minutes - this allows for GitHub Actions delays
         # Cron triggers at specific times, but execution may be delayed
-        if now_pacific.hour not in target_hours:
-            logger.info(f"⏭️  Skipping: Current Pacific time is {now_pacific.strftime('%I:%M %p')}, not {target_time_str}")
-            logger.info(f"   This is expected due to daylight saving time handling")
-            logger.info("=" * 80)
-            return 0
+        # Note: For cancellations, we already checked time window above
+        if workflow_type != 'cancellations':
+            if now_pacific.hour not in target_hours:
+                logger.info(f"⏭️  Skipping: Current Pacific time is {now_pacific.strftime('%I:%M %p')}, not {target_time_str}")
+                logger.info(f"   This is expected due to daylight saving time handling")
+                logger.info("=" * 80)
+                return 0
         
         # Check if today is weekend (skip weekends, no calls on weekends)
         today_date = now_pacific.date()

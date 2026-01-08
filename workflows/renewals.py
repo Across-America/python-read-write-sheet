@@ -243,12 +243,13 @@ def get_current_renewal_sheet():
 # Data Validation and Filtering
 # ========================================
 
-def validate_renewal_customer_data(customer):
+def validate_renewal_customer_data(customer, allow_expired=False):
     """
     Comprehensive data validation for renewal customer
     
     Args:
         customer: Customer dict
+        allow_expired: If True, allow expired policies (for expired after customers)
         
     Returns:
         tuple: (is_valid: bool, error_message: str, validated_data: dict)
@@ -289,7 +290,12 @@ def validate_renewal_customer_data(customer):
             pacific_tz = ZoneInfo("America/Los_Angeles")
             today_pacific = datetime.now(pacific_tz).date()
             if expiry_date < today_pacific:
-                errors.append(f"Policy already expired: {expiry_date}")
+                if not allow_expired:
+                    errors.append(f"Policy already expired: {expiry_date}")
+                else:
+                    # For expired after customers, allow expired policies
+                    validated['expiration_date'] = expiry_date
+                    validated['expiration_date_str'] = expiry_field
             else:
                 validated['expiration_date'] = expiry_date
                 validated['expiration_date_str'] = expiry_field
@@ -304,20 +310,32 @@ def validate_renewal_customer_data(customer):
     else:
         validated['renewal_status'] = renewal_status
     
-    # Payee validation
-    payee = str(customer.get('payee', '')).strip().lower()
-    if 'direct billed' not in payee and 'directbilled' not in payee.replace(' ', ''):
-        errors.append(f"Payee is not 'direct billed': {customer.get('payee', 'N/A')}")
+    # Payee validation - skip for expired after customers
+    if not allow_expired:
+        payee = str(customer.get('payee', '')).strip().lower()
+        if 'direct billed' not in payee and 'directbilled' not in payee.replace(' ', ''):
+            errors.append(f"Payee is not 'direct billed': {customer.get('payee', 'N/A')}")
+        else:
+            validated['payee'] = payee
     else:
-        validated['payee'] = payee
+        # For expired after customers, payee validation is optional
+        payee = str(customer.get('payee', '')).strip()
+        if payee:
+            validated['payee'] = payee
     
-    # Payment status validation
-    payment_status = str(customer.get('payment_status', '') or customer.get('status', '')).strip().lower()
-    if 'pending payment' not in payment_status and 'pendingpayment' not in payment_status.replace(' ', ''):
-        status_value = customer.get('payment_status', '') or customer.get('status', 'N/A')
-        errors.append(f"Payment status is not 'pending payment': {status_value}")
+    # Payment status validation - skip for expired after customers
+    if not allow_expired:
+        payment_status = str(customer.get('payment_status', '') or customer.get('status', '')).strip().lower()
+        if 'pending payment' not in payment_status and 'pendingpayment' not in payment_status.replace(' ', ''):
+            status_value = customer.get('payment_status', '') or customer.get('status', 'N/A')
+            errors.append(f"Payment status is not 'pending payment': {status_value}")
+        else:
+            validated['payment_status'] = payment_status
     else:
-        validated['payment_status'] = payment_status
+        # For expired after customers, status validation is optional
+        payment_status = str(customer.get('payment_status', '') or customer.get('status', '')).strip()
+        if payment_status:
+            validated['payment_status'] = payment_status
     
     if errors:
         return False, "; ".join(errors), None
@@ -890,6 +908,15 @@ def get_renewal_expired_after_customers(smartsheet_service):
         if today <= expiration_plus_one:
             skipped_count += 1
             continue
+        
+        # 检查今天是否已经拨打过（防止重复拨打）
+        last_call_date_str = customer.get('last_call_made_date', '') or ''
+        if last_call_date_str:
+            last_call_date = parse_date(last_call_date_str)
+            if last_call_date and last_call_date == today:
+                skipped_count += 1
+                print(f"   ⏭️  Skipping row {row_num}: Already called today ({last_call_date_str})")
+                continue
         
         # 添加到过期后客户列表
         expired_customers.append(customer)
@@ -1747,9 +1774,10 @@ def run_renewal_batch_calling(test_mode=False, schedule_at=None, auto_confirm=Fa
                 total_success += 1
         else:
             # Validate customers before calling
+            # Use allow_expired=True for expired after customers to bypass expired date and strict payee/status checks
             validated_customers = []
             for customer in expired_after_customers:
-                is_valid, error_msg, validated_data = validate_renewal_customer_data(customer)
+                is_valid, error_msg, validated_data = validate_renewal_customer_data(customer, allow_expired=True)
                 if is_valid:
                     # Merge validated data into customer (especially phone_number)
                     customer_for_call = {**customer, **validated_data}
