@@ -145,6 +145,9 @@ if __name__ == "__main__":
     
     pacific_tz = ZoneInfo("America/Los_Angeles")
     
+    # Check if running in GitHub Actions
+    is_github_actions = os.getenv('GITHUB_ACTIONS') == 'true'
+    
     # Wait until 9:00 AM if not already past
     now_pacific = datetime.now(pacific_tz)
     current_hour = now_pacific.hour
@@ -155,9 +158,19 @@ if __name__ == "__main__":
         target_time = now_pacific.replace(hour=STM1_CALLING_START_HOUR, minute=0, second=0, microsecond=0)
         wait_seconds = (target_time - now_pacific).total_seconds()
         print(f"⏰ Current time: {now_pacific.strftime('%I:%M %p %Z')}")
-        print(f"⏰ Waiting until 9:00 AM... ({wait_seconds/60:.1f} minutes)")
-        if wait_seconds > 0:
-            time.sleep(wait_seconds)
+        
+        # In GitHub Actions, don't wait - just exit if too early
+        # The workflow should be scheduled for the correct time
+        if is_github_actions:
+            print(f"⏰ Too early - GitHub Actions detected. Current time is before {STM1_CALLING_START_HOUR}:00 AM Pacific Time")
+            print(f"   Workflow should be scheduled for UTC 16:00 (PDT) or UTC 17:00 (PST) to match 9:00 AM Pacific Time")
+            print(f"   Exiting. Will try again at the next scheduled run.")
+            sys.exit(0)
+        else:
+            # Local run: wait until 9 AM
+            print(f"⏰ Waiting until 9:00 AM... ({wait_seconds/60:.1f} minutes)")
+            if wait_seconds > 0:
+                time.sleep(wait_seconds)
     
     # Initialize services
     print("\n" + "=" * 80)
@@ -210,12 +223,18 @@ if __name__ == "__main__":
         
         # Check if within calling hours
         if current_hour < STM1_CALLING_START_HOUR:
-            # Wait until 9 AM
-            target_time = now_pacific.replace(hour=STM1_CALLING_START_HOUR, minute=0, second=0, microsecond=0)
-            wait_seconds = (target_time - now_pacific).total_seconds()
-            if wait_seconds > 0:
-                print(f"\n⏰ Waiting until 9:00 AM... ({wait_seconds/60:.1f} minutes)")
-                time.sleep(min(wait_seconds, 60))  # Check every minute
+            # In GitHub Actions, don't wait - just exit if too early
+            if is_github_actions:
+                print(f"\n⏰ Too early - GitHub Actions detected. Current time is before {STM1_CALLING_START_HOUR}:00 AM Pacific Time")
+                print(f"   Exiting. Will try again at the next scheduled run.")
+                break
+            else:
+                # Local run: wait until 9 AM
+                target_time = now_pacific.replace(hour=STM1_CALLING_START_HOUR, minute=0, second=0, microsecond=0)
+                wait_seconds = (target_time - now_pacific).total_seconds()
+                if wait_seconds > 0:
+                    print(f"\n⏰ Waiting until 9:00 AM... ({wait_seconds/60:.1f} minutes)")
+                    time.sleep(min(wait_seconds, 60))  # Check every minute
                 continue
         
         # Get customers with empty called_times (with error handling)
@@ -371,7 +390,8 @@ if __name__ == "__main__":
                                         break
                         except Exception as e:
                             print(f"      ⚠️  Error waiting for analysis: {e}")
-                            # Continue with available call_data
+                            print(f"      ⚠️  Continuing with available call_data...")
+                            # Continue with available call_data - don't break the loop
                     else:
                         # Call already completed, check if analysis is ready
                         if call_data.get('analysis'):
@@ -404,12 +424,15 @@ if __name__ == "__main__":
                         total_success += 1
                     else:
                         print(f"   ❌ Smartsheet update returned False")
+                        print(f"   ⚠️  Continuing to next call despite update failure...")
                         total_failed += 1
                 except Exception as e:
                     print(f"   ❌ Exception during Smartsheet update: {e}")
+                    print(f"   ⚠️  Continuing to next call despite error...")
                     import traceback
                     traceback.print_exc()
                     total_failed += 1
+                    # Don't break - continue to next call
             else:
                 print(f"   ❌ Call failed - no results returned")
                 total_failed += 1
