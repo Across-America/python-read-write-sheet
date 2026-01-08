@@ -261,24 +261,55 @@ def get_stm1_sheet():
     Returns:
         SmartsheetService instance
     """
-    try:
-        if STM1_SHEET_ID and STM1_SHEET_ID != 0:
+    # Try Sheet ID first
+    if STM1_SHEET_ID and STM1_SHEET_ID != 0:
+        try:
             print(f"🔍 Using STM1 sheet ID: {STM1_SHEET_ID}")
             smartsheet_service = SmartsheetService(sheet_id=STM1_SHEET_ID)
-            return smartsheet_service
-        else:
-            # Fallback: Try by name in workspace
-            print(f"🔍 Looking for STM1 sheet: '{STM1_SHEET_NAME}' in workspace '{STM1_WORKSPACE_NAME}'")
-            smartsheet_service = SmartsheetService(
-                sheet_name=STM1_SHEET_NAME,
-                workspace_name=STM1_WORKSPACE_NAME
-            )
-            return smartsheet_service
+            # Test if we can actually access the sheet
+            try:
+                test_customers = smartsheet_service.get_all_customers_with_stages()
+                if test_customers:
+                    print(f"✅ Sheet ID {STM1_SHEET_ID} is accessible ({len(test_customers)} rows)")
+                    return smartsheet_service
+            except Exception as test_error:
+                print(f"⚠️  Sheet ID {STM1_SHEET_ID} access test failed: {test_error}")
+                print(f"   Will try fallback method (sheet name lookup)")
+        except Exception as e:
+            print(f"⚠️  Failed to initialize with sheet ID {STM1_SHEET_ID}: {e}")
+            print(f"   Will try fallback method (sheet name lookup)")
+    
+    # Fallback: Try by name in workspace
+    try:
+        print(f"🔍 Fallback: Looking for STM1 sheet: '{STM1_SHEET_NAME}' in workspace '{STM1_WORKSPACE_NAME}'")
+        smartsheet_service = SmartsheetService(
+            sheet_name=STM1_SHEET_NAME,
+            workspace_name=STM1_WORKSPACE_NAME
+        )
+        # Test if we can actually access the sheet
+        try:
+            test_customers = smartsheet_service.get_all_customers_with_stages()
+            if test_customers:
+                print(f"✅ Sheet '{STM1_SHEET_NAME}' found and accessible ({len(test_customers)} rows)")
+                return smartsheet_service
+        except Exception as test_error:
+            print(f"⚠️  Sheet name lookup access test failed: {test_error}")
     except Exception as e:
-        print(f"❌ Failed to get STM1 sheet: {e}")
-        print(f"   Workspace: {STM1_WORKSPACE_NAME}")
-        print(f"   Sheet Name: {STM1_SHEET_NAME}")
-        raise
+        print(f"❌ Fallback method also failed: {e}")
+    
+    # If both methods failed, raise error with helpful message
+    error_msg = f"Failed to get STM1 sheet using both methods:\n"
+    error_msg += f"  1. Sheet ID {STM1_SHEET_ID} - Failed\n"
+    error_msg += f"  2. Sheet Name '{STM1_SHEET_NAME}' in workspace '{STM1_WORKSPACE_NAME}' - Failed\n"
+    error_msg += f"\nPossible causes:\n"
+    error_msg += f"  - SMARTSHEET_ACCESS_TOKEN is invalid or expired\n"
+    error_msg += f"  - Token does not have access to this sheet\n"
+    error_msg += f"  - Sheet ID is incorrect or sheet has been deleted\n"
+    error_msg += f"  - Sheet has been moved to a different workspace\n"
+    error_msg += f"\nPlease check:\n"
+    error_msg += f"  - GitHub Secrets: https://github.com/Across-America/python-read-write-sheet/settings/secrets/actions\n"
+    error_msg += f"  - Verify SMARTSHEET_ACCESS_TOKEN is set correctly\n"
+    raise Exception(error_msg)
 
 
 def get_stm1_customers_ready_for_calls(smartsheet_service):

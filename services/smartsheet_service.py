@@ -345,7 +345,17 @@ class SmartsheetService:
             return customers
 
         except Exception as e:
-            print(f"❌ Error loading customers: {e}")
+            error_msg = str(e)
+            # Check if it's a 404 error
+            if "404" in error_msg or "Not Found" in error_msg or "1006" in error_msg:
+                print(f"❌ Error loading customers: Smartsheet API returned 404 Not Found")
+                print(f"   This usually means:")
+                print(f"   - Sheet ID {self.sheet_id} does not exist or is inaccessible")
+                print(f"   - SMARTSHEET_ACCESS_TOKEN does not have permission to access this sheet")
+                print(f"   - Token may be invalid or expired")
+                print(f"   Error details: {error_msg}")
+            else:
+                print(f"❌ Error loading customers: {e}")
             return []
     
     def _normalize_field_name(self, title):
