@@ -688,10 +688,28 @@ class VAPIService:
                     print(f"      ❌ Cannot fix - skipping this customer")
                     continue
             
-            # Create customer context for VAPI
+            # Additional validation: ensure it's exactly E.164 format (+1 + 10 digits = 12 chars total)
+            # Remove any non-digit characters except the leading +
+            cleaned_phone = '+' + ''.join(c for c in formatted_phone[1:] if c.isdigit())
+            if cleaned_phone != formatted_phone:
+                print(f"   ⚠️  Phone had non-digit characters, cleaned: '{formatted_phone}' -> '{cleaned_phone}'")
+                formatted_phone = cleaned_phone
+            
+            # Validate E.164 format: +1XXXXXXXXXX (12 characters: +1 + 10 digits)
+            if formatted_phone.startswith('+1'):
+                digits_after_plus1 = ''.join(c for c in formatted_phone[2:] if c.isdigit())
+                if len(digits_after_plus1) != 10:
+                    print(f"   ⚠️  WARNING: Phone number has {len(digits_after_plus1)} digits after +1, expected 10")
+                    print(f"      Phone: '{formatted_phone}'")
+                    print(f"      This may cause VAPI API error!")
+            
+            # Create customer context for VAPI - ensure it's a clean string
+            # Note: VAPI may have strict E.164 validation that rejects some valid numbers
+            # We'll disable strict validation to allow numbers that are correctly formatted
             customer_context = {
-                "number": formatted_phone,
-                "name": customer_name
+                "number": str(formatted_phone).strip(),  # Ensure it's a clean string
+                "name": customer_name,
+                "numberE164CheckEnabled": False  # Disable strict E.164 validation
             }
             
             # Debug: Log phone number formatting for first few customers
@@ -947,10 +965,44 @@ class VAPIService:
                     print(f"   Phone type: {type(first_customer_phone)}")
                     print(f"   Phone starts with +: {first_customer_phone.startswith('+') if first_customer_phone != 'N/A' else False}")
                     print(f"   Phone length: {len(first_customer_phone) if first_customer_phone != 'N/A' else 0}")
+                    # Check for hidden characters
+                    if first_customer_phone != 'N/A':
+                        print(f"   Phone repr: {repr(first_customer_phone)}")
+                        print(f"   Phone hex: {first_customer_phone.encode('utf-8').hex()}")
+                        # Count digits after +
+                        digits_after_plus = ''.join(c for c in first_customer_phone[1:] if c.isdigit())
+                        print(f"   Digits after +: {len(digits_after_plus)} (should be 11 for US: 1 country code + 10 digits)")
                     # Also check the payload directly
                     if 'customers' in payload and payload['customers']:
                         payload_phone = payload['customers'][0].get('number', 'N/A')
                         print(f"   Payload customers[0].number: '{payload_phone}'")
+                        print(f"   Payload phone repr: {repr(payload_phone) if payload_phone != 'N/A' else 'N/A'}")
+                        # Validate E.164 format
+                        if payload_phone != 'N/A' and payload_phone.startswith('+'):
+                            digits = ''.join(c for c in payload_phone[1:] if c.isdigit())
+                            if len(digits) == 11 and digits.startswith('1'):
+                                print(f"   ✅ E.164 format looks correct: +1 + 10 digits")
+                            else:
+                                print(f"   ⚠️  E.164 format issue: {len(digits)} digits after +, starts with 1: {digits.startswith('1') if digits else False}")
+                
+                # Debug: Check the actual JSON being sent
+                if attempt == 0 and vapi_customers:
+                    import json
+                    debug_payload = {
+                        "assistantId": assistant_id,
+                        "phoneNumberId": self.phone_number_id,
+                        "customers": [vapi_customers[0]],  # Just first customer for debug
+                        "assistantOverrides": {}  # Simplified for debug
+                    }
+                    print(f"\n🔍 DEBUG: JSON payload (first customer only):")
+                    json_str = json.dumps(debug_payload, indent=2)
+                    print(json_str[:500])  # First 500 chars
+                    # Check the phone number in JSON
+                    if 'customers' in debug_payload and debug_payload['customers']:
+                        json_phone = debug_payload['customers'][0].get('number', 'N/A')
+                        print(f"\n   Phone in JSON: '{json_phone}'")
+                        print(f"   Phone repr in JSON: {repr(json_phone)}")
+                        print(f"   Phone type: {type(json_phone)}")
                 
                 response = requests.post(
                     f"{self.base_url}/call",
