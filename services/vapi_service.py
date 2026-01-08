@@ -675,6 +675,19 @@ class VAPIService:
             if len(customer_name) > 40:
                 customer_name = customer_name[:37] + "..."  # Truncate to 37 chars + "..." = 40 total
             
+            # Final validation: ensure formatted_phone is in E.164 format
+            if not formatted_phone.startswith('+'):
+                print(f"   ❌ CRITICAL: Formatted phone does not start with +: '{formatted_phone}'")
+                print(f"      Original: '{phone}'")
+                # Force fix: add +1 if it's missing
+                phone_digits = ''.join(c for c in formatted_phone if c.isdigit())
+                if len(phone_digits) >= 9:
+                    formatted_phone = f"+1{phone_digits}"
+                    print(f"      Force fixed to: '{formatted_phone}'")
+                else:
+                    print(f"      ❌ Cannot fix - skipping this customer")
+                    continue
+            
             # Create customer context for VAPI
             customer_context = {
                 "number": formatted_phone,
@@ -684,6 +697,7 @@ class VAPIService:
             # Debug: Log phone number formatting for first few customers
             if len(vapi_customers) < 3:
                 print(f"   [DEBUG] Customer {len(vapi_customers)}: Original='{phone}' -> Formatted='{formatted_phone}'")
+                print(f"      Validation: starts with +={formatted_phone.startswith('+')}, length={len(formatted_phone)}")
 
             vapi_customers.append(customer_context)
 
