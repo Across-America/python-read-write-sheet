@@ -809,6 +809,12 @@ class VAPIService:
             print(f"   Number type: {type(vapi_customers[94].get('number', 'N/A'))}")
             print(f"   Number length: {len(vapi_customers[94].get('number', ''))}")
         
+        # Debug: Check phone numbers before sending
+        print(f"\n🔍 DEBUG: Checking phone numbers before sending to VAPI...")
+        for i, customer in enumerate(vapi_customers[:3]):  # Check first 3
+            phone_num = customer.get('number', '')
+            print(f"   Customer {i}: number='{phone_num}' (type: {type(phone_num)}, starts with +: {phone_num.startswith('+') if phone_num else False})")
+        
         # Prepare payload with the specified assistant
         payload = {
             "assistantId": assistant_id,
@@ -816,6 +822,12 @@ class VAPIService:
             "customers": vapi_customers,
             "assistantOverrides": assistant_overrides
         }
+        
+        # Debug: Log the actual payload being sent (first customer only)
+        if vapi_customers:
+            print(f"\n🔍 DEBUG: First customer in payload:")
+            print(f"   Number: {vapi_customers[0].get('number', 'N/A')}")
+            print(f"   Name: {vapi_customers[0].get('name', 'N/A')}")
         
         # Add scheduling if specified
         if schedule_at:
@@ -913,6 +925,19 @@ class VAPIService:
         import time
         for attempt in range(max_retries):
             try:
+                # Debug: Log the actual payload being sent (first customer's phone number)
+                if vapi_customers and attempt == 0:
+                    first_customer_phone = vapi_customers[0].get('number', 'N/A')
+                    print(f"\n🔍 DEBUG: Sending to VAPI API:")
+                    print(f"   First customer phone: '{first_customer_phone}'")
+                    print(f"   Phone type: {type(first_customer_phone)}")
+                    print(f"   Phone starts with +: {first_customer_phone.startswith('+') if first_customer_phone != 'N/A' else False}")
+                    print(f"   Phone length: {len(first_customer_phone) if first_customer_phone != 'N/A' else 0}")
+                    # Also check the payload directly
+                    if 'customers' in payload and payload['customers']:
+                        payload_phone = payload['customers'][0].get('number', 'N/A')
+                        print(f"   Payload customers[0].number: '{payload_phone}'")
+                
                 response = requests.post(
                     f"{self.base_url}/call",
                     headers={
