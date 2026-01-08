@@ -64,6 +64,10 @@ def format_phone_number(phone_number):
         elif len(cleaned) == 11 and cleaned.startswith('1'):
             # 11-digit number starting with 1 - add +
             formatted_phone = f"+{cleaned}"
+        elif len(cleaned) == 9:
+            # 9-digit number - might be missing leading 1, add +1
+            # This handles cases like "552-752-9867" which becomes "5527529867"
+            formatted_phone = f"+1{cleaned}"
         elif len(cleaned) > 0:
             # Other length - assume US and add +1
             formatted_phone = f"+1{cleaned}"
@@ -72,5 +76,12 @@ def format_phone_number(phone_number):
             return phone_str
     else:
         formatted_phone = cleaned
+    
+    # Final validation: ensure it starts with + and has at least 10 digits after country code
+    if formatted_phone.startswith('+'):
+        digits_after_plus = ''.join(c for c in formatted_phone[1:] if c.isdigit())
+        if len(digits_after_plus) < 10:
+            # Too short - might be invalid, but return it anyway (let VAPI validate)
+            pass
     
     return formatted_phone

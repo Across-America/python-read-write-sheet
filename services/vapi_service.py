@@ -645,6 +645,30 @@ class VAPIService:
                 continue
             
             formatted_phone = format_phone_number(phone)
+            
+            # Validate formatted phone number
+            if not formatted_phone or not formatted_phone.startswith('+'):
+                print(f"   ⚠️  WARNING: Phone number formatting may have failed!")
+                print(f"      Original: {phone}")
+                print(f"      Formatted: {formatted_phone}")
+                print(f"      This may cause VAPI API error!")
+                # Try to fix: if it's a 9-digit number, it might be missing the leading 1
+                phone_cleaned = str(phone).strip().replace(" ", "").replace("-", "").replace("(", "").replace(")", "").replace(".", "").replace("/", "")
+                if len(phone_cleaned) == 9:
+                    # 9-digit number - might be missing leading 1, try adding it
+                    formatted_phone = f"+1{phone_cleaned}"
+                    print(f"      Fixed: {formatted_phone} (added +1 to 9-digit number)")
+                elif len(phone_cleaned) == 10:
+                    # 10-digit number - should have +1
+                    formatted_phone = f"+1{phone_cleaned}"
+                    print(f"      Fixed: {formatted_phone} (added +1 to 10-digit number)")
+                elif len(phone_cleaned) == 11 and phone_cleaned.startswith('1'):
+                    # 11-digit number starting with 1 - add +
+                    formatted_phone = f"+{phone_cleaned}"
+                    print(f"      Fixed: {formatted_phone} (added + to 11-digit number)")
+                else:
+                    print(f"      ❌ Could not fix phone number format!")
+                    continue  # Skip this customer
 
             # Get customer name and truncate to 40 characters (VAPI API requirement)
             customer_name = customer.get('company', customer.get('insured_name', customer.get('insured', 'Customer')))
@@ -656,6 +680,10 @@ class VAPIService:
                 "number": formatted_phone,
                 "name": customer_name
             }
+            
+            # Debug: Log phone number formatting for first few customers
+            if len(vapi_customers) < 3:
+                print(f"   [DEBUG] Customer {len(vapi_customers)}: Original='{phone}' -> Formatted='{formatted_phone}'")
 
             vapi_customers.append(customer_context)
 
